@@ -32,7 +32,11 @@ export class LaunchController {
     ).setOrigin(0.5, 1).setDepth(21).setScrollFactor(0);
   }
 
-  start() {
+  /**
+   * @param {number} [originX] 矢印の根本 X（画面座標）
+   * @param {number} [originY] 矢印の根本 Y（画面座標）
+   */
+  start(originX = PAD_X, originY = GAME_HEIGHT - 60) {
     this._phase    = 'angle';
     this._angle    = 90;
     this._power    = 0;
@@ -40,6 +44,8 @@ export class LaunchController {
     this._powerDir = 1;
     this._active   = true;
     this._result   = null;
+    this._originX  = originX;
+    this._originY  = originY;
     this._hintText.setVisible(true);
   }
 
@@ -101,10 +107,10 @@ export class LaunchController {
     this._gfx.clear();
     this._uiGfx.clear();
 
-    // 発射台から伸びる矢印
+    // 発射元から伸びる矢印（origin は start() で設定）
     const rad = (this._angle * Math.PI) / 180;
-    const ax  = PAD_X + Math.cos(rad) * ARROW_LEN;
-    const ay  = (GAME_HEIGHT - 60) - Math.sin(rad) * ARROW_LEN;  // 画面座標（scroll factor 0）
+    const ax  = this._originX + Math.cos(rad) * ARROW_LEN;
+    const ay  = this._originY - Math.sin(rad) * ARROW_LEN;
 
     const bright = this._phase === 'power'
       ? `rgba(255,${Math.round(80 + this._power * 175)},0,1)`
@@ -112,7 +118,7 @@ export class LaunchController {
 
     this._gfx.lineStyle(3, this._phase === 'power' ? 0xff6b00 : 0xffffff, 1);
     this._gfx.beginPath();
-    this._gfx.moveTo(PAD_X, GAME_HEIGHT - 60);
+    this._gfx.moveTo(this._originX, this._originY);
     this._gfx.lineTo(ax, ay);
     this._gfx.strokePath();
 
