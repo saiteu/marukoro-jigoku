@@ -1,10 +1,10 @@
 /**
  * ゲームシーン（Arcade Physics 版）
  *
- * TestScene で検証済みの物理・スコア・着地判定を移植
- * - Arcade Physics（gravity.y=1500）
- * - 発射・スコア・力尽きた判定は TestScene と同仕様
- * - Matter.js の記述は全て削除済み
+ * 足場から足場へ渡り歩くゲーム
+ * - 通常足場（全高度）：緑色・静止
+ * - 移動足場（200m以上）：青色・左右移動
+ * - 消える足場（350m以上）：オレンジ・3秒で消滅
  */
 import Phaser from 'phaser';
 import {
@@ -17,26 +17,36 @@ import { LaunchController } from '../objects/LaunchController.js';
 import { TrailEffect } from '../objects/TrailEffect.js';
 import { soundManager } from '../systems/SoundManager.js';
 
-const LAUNCH_X = LAUNCH.launchPadX;   // 240px
-const LAUNCH_Y = LAUNCH.launchPadY;   // 580px（スコア基準 Y）
+const LAUNCH_X = LAUNCH.launchPadX;
+const LAUNCH_Y = LAUNCH.launchPadY;
 const RADIUS   = 18;
 const WALL_H   = 8000;
 const WALL_W   = 30;
 
-// ---- 通常足場定数 ----
-const PLATFORM_START_M   = 20;    // 出現開始高度（m）
-const PLATFORM_W         = 90;    // 幅（px）
-const PLATFORM_H         = 14;    // 高さ（px）
-const PLATFORM_SPACE_MIN = 180;   // 最小間隔（px）
-const PLATFORM_SPACE_MAX = 320;   // 最大間隔（px）
-const PLATFORM_COLOR     = 0x888888; // 灰色
+// ---- 足場共通 ----
+const PLATFORM_H         = 14;
+const PLATFORM_W_MIN     = 100;
+const PLATFORM_W_MAX     = 200;
+const PLATFORM_SPACE_MIN = 120;   // 縦間隔最小（px）
+const PLATFORM_SPACE_MAX = 180;   // 縦間隔最大（px）必ずクリア可能な範囲
+const SAFETY_ZONE_PX     = 500;   // 発射台から上方500px以内は足場なし
 
-// ---- バネ床定数 ----
-const SPRING_START_M   = 100;   // 出現開始高度（m）
-const SPRING_W         = 80;    // 幅（px）
-const SPRING_H         = 14;    // 高さ（px）
-const SPRING_SPACE_MIN = 220;   // 最小間隔（px）
-const SPRING_SPACE_MAX = 380;   // 最大間隔（px）
+// ---- 足場種別閾値 ----
+const MOVING_START_M  = 200;   // 移動足場出現（m）
+const VANISH_START_M  = 350;   // 消える足場出現（m）
+
+// ---- 移動足場 ----
+const MOVING_RANGE    = 100;   // 左右移動幅（px）
+const MOVING_DURATION = 1500;  // 往復時間（ms）
+
+// ---- 消える足場 ----
+const VANISH_DELAY    = 3000;  // 消えるまでの時間（ms）
+const VANISH_WARN     = 2000;  // 点滅警告開始（ms）
+
+// ---- 足場カラー ----
+const COLOR_NORMAL  = 0x44cc66;  // 緑
+const COLOR_MOVING  = 0x74b9ff;  // 青
+const COLOR_VANISH  = 0xff9f43;  // オレンジ
 
 export class GameScene extends Phaser.Scene {
   constructor() {
@@ -81,60 +91,40 @@ export class GameScene extends Phaser.Scene {
     this._ball.setMaxVelocity(2000, 3000);
     this._ball.setDragX(200);
     this._ball.setDepth(10);
-    this._ball.body.allowGravity = false;   // エイミング中は重力を止める
+    this._ball.body.allowGravity = false;
 
-    // 壁との衝突判定（着地速度が遅い場合は反発を下げる）
+    // 壁との衝突
     this.physics.add.collider(this._ball, this._walls, (ball) => {
-      const absVy = Math.abs(ball.body.velocity.y);
-      if (absVy < 200) {
-        ball.setBounce(0.1);
-      } else {
-        ball.setBounce(0.6);
-      }
+      ball.setBounce(Math.abs(ball.body.velocity.y) < 200 ? 0.1 : 0.6);
     });
 
-    // ---- 通常足場（上面のみ衝突） ----
+    // ---- 通常足場 ----
     this._platformGroup = this.physics.add.staticGroup();
-    this.physics.add.collider(this._ball, this._platformGroup, (ball, platform) => {
-      const playerBottom = ball.body.bottom;
-      const platformTop  = platform.body.top;
-      if (playerBottom - platformTop > 20) {
-        // 下から当たった場合は押し返す
-        ball.setVelocityY(Math.abs(ball.body.velocity.y));
-      } else {
-        // 上から乗った場合：着地速度に応じて反発を下げる
-        ball.setBounce(Math.abs(ball.body.velocity.y) < 200 ? 0.1 : 0.6);
-      }
-    });
-    this._nextPlatformY = LAUNCH_Y - PLATFORM_START_M * COURSE.pxPerMeter;
-
-    // ---- ギミック：バネ床（上面のみ発動・下からは通り抜け・クールダウン付き） ----
-    this._springGroup = this.physics.add.staticGroup();
     this.physics.add.collider(
-      this._ball,
-      this._springGroup,
-      (ball, spring) => {
-        // クールダウン中は無視（processCallback でも弾くが念のため）
-        if (spring.activated) return;
-        spring.activated = true;
+      this._ball, this._platformGroup,
+      (ball, plat) => this._onLandPlatform(ball, plat),
+    );
 
-        const randomX = Phaser.Math.Between(-150, 150);
-        ball.setVelocityX(randomX);
-        ball.setVelocityY(-1200);
-        soundManager.playSe('se_spring');
+    // ---- 移動足場 ----
+    this._movingGroup = this.physics.add.staticGroup();
+    this.physics.add.collider(
+      this._ball, this._movingGroup,
+      (ball, plat) => this._onLandPlatform(ball, plat),
+    );
 
-        // 1秒後にクールダウン解除
-        this.time.delayedCall(1000, () => {
-          if (spring && spring.active) spring.activated = false;
-        });
-      },
-      (ball, spring) => {
-        // クールダウン中 or 下から当たった場合は衝突を無効化
-        if (spring.activated) return false;
-        return ball.body.bottom - spring.body.top <= 20;
+    // ---- 消える足場 ----
+    this._vanishGroup = this.physics.add.staticGroup();
+    this.physics.add.collider(
+      this._ball, this._vanishGroup,
+      (ball, plat) => {
+        this._onLandPlatform(ball, plat);
+        // 上から初接触で消滅タイマー開始
+        if (!plat.vanishStarted && ball.body.bottom - plat.body.top <= 20) {
+          plat.vanishStarted = true;
+          this._startVanishTimer(plat);
+        }
       },
     );
-    this._nextSpringY = LAUNCH_Y - SPRING_START_M * COURSE.pxPerMeter;
 
     // ---- エフェクト ----
     this._trail = new TrailEffect(this);
@@ -171,18 +161,20 @@ export class GameScene extends Phaser.Scene {
     this._launched       = false;
     this._gameOverFlag   = false;
     this._relaunchFlag   = false;
-    this._isRelaunch     = false;   // 足場からの再発射かどうか
-    this._relaunchPos    = null;    // 再発射時のボール位置（world座標）
+    this._isRelaunch     = false;
+    this._relaunchPos    = null;
     this._maxMeters      = 0;
     this._maxHeight      = 0;
     this._pastApex       = false;
     this._restTimer      = 0;
     this._stuckTimer     = 0;
     this._lastStuckY     = 0;
+    // 足場生成カーソル（安全地帯の直上から開始）
+    this._nextPlatformY  = LAUNCH_Y - SAFETY_ZONE_PX;
   }
 
   // ------------------------------------------------------------------
-  // テクスチャ動的生成（存在チェックで重複生成を防ぐ）
+  // テクスチャ動的生成
   // ------------------------------------------------------------------
   _createTextures() {
     if (!this.textures.exists('ballTex')) {
@@ -204,13 +196,25 @@ export class GameScene extends Phaser.Scene {
   }
 
   // ------------------------------------------------------------------
+  // 足場着地共通コールバック
+  // ------------------------------------------------------------------
+  _onLandPlatform(ball, plat) {
+    if (ball.body.bottom - plat.body.top > 20) {
+      // 下から当たった → 押し返す
+      ball.setVelocityY(Math.abs(ball.body.velocity.y));
+    } else {
+      // 上から乗った → 速度に応じて反発を下げる
+      ball.setBounce(Math.abs(ball.body.velocity.y) < 200 ? 0.1 : 0.6);
+    }
+  }
+
+  // ------------------------------------------------------------------
   // 入力
   // ------------------------------------------------------------------
   _onConfirm() {
     if (this._state !== 'aiming') return;
     const vel = this._launcher.confirm();
     if (vel) {
-      // 発射：setVelocity は発射時の1回のみ
       this._ball.body.allowGravity = true;
       this._ball.setVelocity(vel.vx, vel.vy);
       this._trail.start();
@@ -235,15 +239,17 @@ export class GameScene extends Phaser.Scene {
 
     this._launcher.update(dt);
 
+    // 足場はエイミング中も生成して事前に見せる
+    this._generatePlatforms();
+    this._cleanupPlatforms();
+
     switch (this._state) {
       case 'aiming': {
-        // 通常：発射台に固定　再発射：着地した足場位置に固定
         const aimX = (this._isRelaunch && this._relaunchPos) ? this._relaunchPos.x : LAUNCH_X;
         const aimY = (this._isRelaunch && this._relaunchPos) ? this._relaunchPos.y : LAUNCH_Y;
         this._ball.body.reset(aimX, aimY);
         break;
       }
-
       case 'flying':
         this._tickFlying(dt);
         this._trail.update(this._ball.x, this._ball.y, dt);
@@ -258,19 +264,19 @@ export class GameScene extends Phaser.Scene {
     const by = this._ball.y;
     const vy = this._ball.body.velocity.y;
 
-    // ---- 速度上限：下方向 800px/s を超えたらキャップ ----
+    // 下方向 800px/s キャップ
     if (vy > 800) this._ball.setVelocityY(800);
 
-    // ---- 頂点検出（vy > 0 = 下降開始） ----
+    // 頂点検出
     if (!this._pastApex && vy > 0) this._pastApex = true;
 
-    // ---- カメラ追従 ----
+    // カメラ追従
     const lerpT  = this._pastApex ? 0.06 : 0.13;
     const desired = by - GAME_HEIGHT * 0.55;
     const cur     = this.cameras.main.scrollY;
     this.cameras.main.setScroll(0, cur + (desired - cur) * lerpT);
 
-    // ---- スコア：上昇中のみ最高記録を更新 ----
+    // スコア（上昇中のみ更新）
     const currentHeight = LAUNCH_Y - by;
     if (currentHeight > this._maxHeight) {
       this._maxHeight = currentHeight;
@@ -280,8 +286,8 @@ export class GameScene extends Phaser.Scene {
     if (!this._meterText.visible) this._meterText.setVisible(true);
     this._meterText.setText(`↑ ${this._maxMeters}m`);
 
-    // ---- 着地静止：onGround で低速なら完全停止 ----
-    const onGroundNow = this._ball.body.blocked.down;
+    // 着地静止：低速 + onGround なら完全停止
+    const onGroundNow   = this._ball.body.blocked.down;
     const totalSpeedNow = Math.sqrt(
       this._ball.body.velocity.x ** 2 + this._ball.body.velocity.y ** 2,
     );
@@ -290,14 +296,8 @@ export class GameScene extends Phaser.Scene {
       this._ball.setBounce(0);
     }
 
-    // ---- 足場・バネ床：生成 & 後片付け ----
-    this._generatePlatforms();
-    this._cleanupPlatforms();
-    this._generateSprings();
-    this._cleanupSprings();
-
-    // ---- スタック検知：同じ高度に3秒以上いたらゲームオーバー ----
-    if (Math.abs(this._ball.y - this._lastStuckY) < 10) {
+    // スタック検知（3秒以上同じ高度 → ゲームオーバー）
+    if (Math.abs(by - this._lastStuckY) < 10) {
       this._stuckTimer += dt;
       if (this._stuckTimer > 3.0 && !this._gameOverFlag) {
         this._gameOverFlag = true;
@@ -305,20 +305,18 @@ export class GameScene extends Phaser.Scene {
         return;
       }
     } else {
-      this._stuckTimer  = 0;
-      this._lastStuckY  = this._ball.y;
+      this._stuckTimer = 0;
+      this._lastStuckY = by;
     }
 
-    // ---- ゲームオーバー / 再発射判定 ----
+    // ゲームオーバー / 再発射判定
     if (!this._launched || this._gameOverFlag) return;
 
     const vx         = this._ball.body.velocity.x;
     const totalSpeed = Math.sqrt(vx * vx + vy * vy);
     const onGround   = this._ball.body.blocked.down;
-    // 発射台 Y を超えたら「落下」とみなす（+100 バッファを外す）
-    const fellBelow  = this._ball.y > LAUNCH_Y;
+    const fellBelow  = by > LAUNCH_Y;
 
-    // 低速継続タイマー：0.3秒以上 totalSpeed < 30 が続いたら「本当に停止」
     if (totalSpeed < 30) {
       this._restTimer += dt;
     } else {
@@ -326,21 +324,19 @@ export class GameScene extends Phaser.Scene {
     }
     const trulyStopped = this._restTimer >= 0.3;
 
-    // 優先1：発射台より下に落下 → ゲームオーバー（最優先・必ず return）
+    // 優先1：発射台より下 → ゲームオーバー
     if (fellBelow) {
       this._gameOverFlag = true;
       this._triggerGameOver();
       return;
     }
-
-    // 優先2：足場の上で静止（落下していない場合のみ）→ 再発射チャンス
+    // 優先2：足場の上で静止 → 再発射
     if (trulyStopped && onGround && !fellBelow) {
       this._gameOverFlag = true;
       this._triggerRelaunch();
       return;
     }
-
-    // 優先3：空中で静止（落下していない場合のみ）→ ゲームオーバー
+    // 優先3：空中で静止 → ゲームオーバー
     if (trulyStopped && !onGround && !fellBelow) {
       this._gameOverFlag = true;
       this._triggerGameOver();
@@ -348,13 +344,14 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  // ------------------------------------------------------------------
+  // 再発射 / ゲームオーバー
+  // ------------------------------------------------------------------
   _triggerRelaunch() {
     if (this._relaunchFlag) return;
     this._relaunchFlag = true;
 
-    // 着地位置を記録してから止める
     this._relaunchPos = { x: this._ball.x, y: this._ball.y };
-
     this._trail.stop();
     this._ball.setVelocity(0, 0);
     this._ball.body.allowGravity = false;
@@ -363,13 +360,8 @@ export class GameScene extends Phaser.Scene {
       this.cameras.main.centerX,
       this.cameras.main.centerY - 50,
       'もう一度とばす！',
-      {
-        fontFamily: 'monospace',
-        fontSize: '16px',
-        color: '#ffffff',
-        stroke: '#000000',
-        strokeThickness: 4,
-      },
+      { fontFamily: 'monospace', fontSize: '16px', color: '#ffffff',
+        stroke: '#000000', strokeThickness: 4 },
     ).setOrigin(0.5).setScrollFactor(0).setDepth(30);
 
     this.time.delayedCall(500, () => {
@@ -390,19 +382,14 @@ export class GameScene extends Phaser.Scene {
     this._ball.setBounce(0.6);
 
     if (this._isRelaunch && this._relaunchPos) {
-      // 足場位置でカメラをセット、矢印もボールの画面位置から出す
-      const scrollY   = this._relaunchPos.y - GAME_HEIGHT * 0.55;
+      const scrollY = this._relaunchPos.y - GAME_HEIGHT * 0.55;
       this.cameras.main.setScroll(0, scrollY);
       this._launcher.start(this._relaunchPos.x, GAME_HEIGHT * 0.55);
     } else {
-      // 通常：発射台に戻す
       this.cameras.main.setScroll(0, 0);
       this._launcher.start();
-      // 足場・バネをリセット（通常ゲームオーバーからの再開時）
-      this._platformGroup.clear(true, true);
-      this._nextPlatformY = LAUNCH_Y - PLATFORM_START_M * COURSE.pxPerMeter;
-      this._springGroup.clear(true, true);
-      this._nextSpringY = LAUNCH_Y - SPRING_START_M * COURSE.pxPerMeter;
+      this._clearAllPlatforms();
+      this._nextPlatformY = LAUNCH_Y - SAFETY_ZONE_PX;
     }
   }
 
@@ -410,9 +397,7 @@ export class GameScene extends Phaser.Scene {
     this._trail.stop();
     this._ball.setVelocity(0, 0);
     this._ball.body.allowGravity = false;
-    // 遷移前に全オブジェクトをクリア
-    this._platformGroup.clear(true, true);
-    this._springGroup.clear(true, true);
+    this._clearAllPlatforms();
 
     this.time.delayedCall(800, () => {
       soundManager.stopBgm();
@@ -420,80 +405,113 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+  _clearAllPlatforms() {
+    this._platformGroup.clear(true, true);
+    // 移動足場はtweenを止めてから削除
+    this._movingGroup.getChildren().slice().forEach(p => {
+      this.tweens.killTweensOf(p);
+      p.destroy();
+    });
+    this._vanishGroup.clear(true, true);
+  }
+
   // ------------------------------------------------------------------
-  // 通常足場 生成 / 削除
+  // 足場 生成 / 削除
   // ------------------------------------------------------------------
   _generatePlatforms() {
-    // 出現高度に到達していなければ生成しない
-    if (this._maxHeight < PLATFORM_START_M * COURSE.pxPerMeter) return;
     const targetY = this.cameras.main.scrollY - 400;
     while (this._nextPlatformY > targetY) {
-      this._spawnPlatform(this._nextPlatformY);
+      this._spawnPlatformAt(this._nextPlatformY);
       this._nextPlatformY -= Phaser.Math.Between(PLATFORM_SPACE_MIN, PLATFORM_SPACE_MAX);
     }
   }
 
-  _spawnPlatform(y) {
-    const minX = WALL_W + PLATFORM_W / 2 + 4;
-    const maxX = GAME_WIDTH - WALL_W - PLATFORM_W / 2 - 4;
+  _spawnPlatformAt(y) {
+    const meters = Math.floor((LAUNCH_Y - y) / COURSE.pxPerMeter);
+    const w = Phaser.Math.Between(PLATFORM_W_MIN, PLATFORM_W_MAX);
+    const minX = WALL_W + w / 2 + 4;
+    const maxX = GAME_WIDTH - WALL_W - w / 2 - 4;
     const x = Phaser.Math.Between(minX, maxX);
-    // バネ床の真上 200px 以内には生成しない
-    if (this._isNearSpring(x, y)) return;
+
+    if (meters >= VANISH_START_M && Math.random() < 0.3) {
+      this._spawnVanishPlatform(x, y, w);
+    } else if (meters >= MOVING_START_M && Math.random() < 0.3) {
+      this._spawnMovingPlatform(x, y, w);
+    } else {
+      this._spawnNormalPlatform(x, y, w);
+    }
+  }
+
+  _spawnNormalPlatform(x, y, w) {
     this._platformGroup.create(x, y, 'wallPx')
-      .setDisplaySize(PLATFORM_W, PLATFORM_H)
-      .setTint(PLATFORM_COLOR)
+      .setDisplaySize(w, PLATFORM_H)
+      .setTint(COLOR_NORMAL)
       .refreshBody();
   }
 
-  _isNearSpring(x, y) {
-    for (const spring of this._springGroup.getChildren()) {
-      if (
-        Math.abs(spring.x - x) < 200 &&
-        spring.y - y < 200 &&
-        spring.y - y > 0
-      ) {
-        return true;
-      }
-    }
-    return false;
+  _spawnMovingPlatform(x, y, w) {
+    const plat = this._movingGroup.create(x, y, 'wallPx')
+      .setDisplaySize(w, PLATFORM_H)
+      .setTint(COLOR_MOVING)
+      .refreshBody();
+
+    const minX  = WALL_W + w / 2 + 4;
+    const maxX  = GAME_WIDTH - WALL_W - w / 2 - 4;
+    const range = Math.min(MOVING_RANGE, Math.min(x - minX, maxX - x));
+
+    this.tweens.add({
+      targets:  plat,
+      x:        x + range,
+      duration: MOVING_DURATION,
+      yoyo:     true,
+      repeat:   -1,
+      ease:     'Sine.InOut',
+      onUpdate: () => { if (plat?.active) plat.refreshBody(); },
+    });
+  }
+
+  _spawnVanishPlatform(x, y, w) {
+    const plat = this._vanishGroup.create(x, y, 'wallPx')
+      .setDisplaySize(w, PLATFORM_H)
+      .setTint(COLOR_VANISH)
+      .refreshBody();
+    plat.vanishStarted = false;
+  }
+
+  _startVanishTimer(plat) {
+    // 2秒後に点滅開始
+    this.time.delayedCall(VANISH_WARN, () => {
+      if (!plat?.active) return;
+      this.tweens.add({
+        targets: plat, alpha: 0,
+        duration: 150, yoyo: true, repeat: 6,
+      });
+    });
+    // 3秒後に消滅
+    this.time.delayedCall(VANISH_DELAY, () => {
+      if (plat?.active) plat.destroy();
+    });
   }
 
   _cleanupPlatforms() {
     const limit = this.cameras.main.scrollY + GAME_HEIGHT + 300;
-    const toRemove = this._platformGroup.getChildren().filter(p => p.y > limit);
-    toRemove.forEach(p => p.destroy());
+
+    this._platformGroup.getChildren()
+      .filter(p => p.y > limit).forEach(p => p.destroy());
+
+    this._movingGroup.getChildren()
+      .filter(p => p.y > limit).forEach(p => {
+        this.tweens.killTweensOf(p);
+        p.destroy();
+      });
+
+    this._vanishGroup.getChildren()
+      .filter(p => p.y > limit).forEach(p => p.destroy());
   }
 
   // ------------------------------------------------------------------
-  // バネ床 生成 / 削除
+  // 消える足場タイマー
   // ------------------------------------------------------------------
-  _generateSprings() {
-    // カメラ上端より 400px 先まで生成しておく
-    const targetY = this.cameras.main.scrollY - 400;
-    while (this._nextSpringY > targetY) {
-      this._spawnSpring(this._nextSpringY);
-      this._nextSpringY -= Phaser.Math.Between(SPRING_SPACE_MIN, SPRING_SPACE_MAX);
-    }
-  }
-
-  _spawnSpring(y) {
-    const minX = WALL_W + SPRING_W / 2 + 4;
-    const maxX = GAME_WIDTH - WALL_W - SPRING_W / 2 - 4;
-    const x = Phaser.Math.Between(minX, maxX);
-    const spring = this._springGroup.create(x, y, 'wallPx')
-      .setDisplaySize(SPRING_W, SPRING_H)
-      .setTint(0xFFD93D)
-      .refreshBody();
-    spring.activated = false;
-  }
-
-  _cleanupSprings() {
-    // カメラ下端より 300px 以下のバネを削除
-    // getChildren() は生配列なのでスナップショットをとってからループ
-    const limit = this.cameras.main.scrollY + GAME_HEIGHT + 300;
-    const toRemove = this._springGroup.getChildren().filter(s => s.y > limit);
-    toRemove.forEach(s => s.destroy());
-  }
 
   // ------------------------------------------------------------------
   // 描画ヘルパー
