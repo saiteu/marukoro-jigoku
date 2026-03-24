@@ -5,6 +5,8 @@
  * - 通常足場（全高度）：緑色・静止
  * - 移動足場（200m以上）：青色・左右移動
  * - 消える足場（350m以上）：オレンジ・3秒で消滅
+ *
+ * チェックポイント制：100mごとにCP、落下時はリトライ可能
  */
 import Phaser from 'phaser';
 import {
@@ -27,26 +29,32 @@ const WALL_W   = 30;
 const PLATFORM_H         = 14;
 const PLATFORM_W_MIN     = 100;
 const PLATFORM_W_MAX     = 200;
-const PLATFORM_SPACE_MIN = 120;   // 縦間隔最小（px）
-const PLATFORM_SPACE_MAX = 180;   // 縦間隔最大（px）必ずクリア可能な範囲
-const SAFETY_ZONE_PX     = 500;   // 発射台から上方500px以内は足場なし
+const PLATFORM_SPACE_MIN = 120;
+const PLATFORM_SPACE_MAX = 180;
+const SAFETY_ZONE_PX     = 500;
 
 // ---- 足場種別閾値 ----
-const MOVING_START_M  = 200;   // 移動足場出現（m）
-const VANISH_START_M  = 350;   // 消える足場出現（m）
+const MOVING_START_M  = 200;
+const VANISH_START_M  = 350;
 
 // ---- 移動足場 ----
-const MOVING_RANGE    = 100;   // 左右移動幅（px）
-const MOVING_DURATION = 1500;  // 往復時間（ms）
+const MOVING_RANGE    = 100;
+const MOVING_DURATION = 1500;
 
 // ---- 消える足場 ----
-const VANISH_DELAY    = 3000;  // 消えるまでの時間（ms）
-const VANISH_WARN     = 2000;  // 点滅警告開始（ms）
+const VANISH_DELAY    = 3000;
+const VANISH_WARN     = 2000;
 
 // ---- 足場カラー ----
-const COLOR_NORMAL  = 0x44cc66;  // 緑
-const COLOR_MOVING  = 0x74b9ff;  // 青
-const COLOR_VANISH  = 0xff9f43;  // オレンジ
+const COLOR_NORMAL  = 0x44cc66;
+const COLOR_MOVING  = 0x74b9ff;
+const COLOR_VANISH  = 0xff9f43;
+
+// ---- チェックポイント ----
+const CP_INTERVAL_M = 100;   // 100mごとにCP
+const CP_X          = 54;    // 旗の表示X（左壁寄り）
+const CP_POLE_H     = 44;    // ポールの高さ
+const CP_FLAG_W     = 22;    // 旗の幅
 
 export class GameScene extends Phaser.Scene {
   constructor() {
@@ -118,7 +126,6 @@ export class GameScene extends Phaser.Scene {
       this._ball, this._vanishGroup,
       (ball, plat) => {
         this._onLandPlatform(ball, plat);
-        // 上から初接触で消滅タイマー開始
         if (!plat.vanishStarted && ball.body.bottom - plat.body.top <= 20) {
           plat.vanishStarted = true;
           this._startVanishTimer(plat);
@@ -169,8 +176,17 @@ export class GameScene extends Phaser.Scene {
     this._restTimer      = 0;
     this._stuckTimer     = 0;
     this._lastStuckY     = 0;
-    // 足場生成カーソル（安全地帯の直上から開始）
     this._nextPlatformY  = LAUNCH_Y - SAFETY_ZONE_PX;
+
+    // ---- チェックポイント ----
+    this._checkpoints = {
+      lastReachedY:      LAUNCH_Y,
+      lastReachedHeight: 0,
+      list:              [],
+    };
+    this._nextCpM    = CP_INTERVAL_M;
+    this._retryCount = 0;
+    this._retryUI    = [];
   }
 
   // ------------------------------------------------------------------
@@ -200,10 +216,8 @@ export class GameScene extends Phaser.Scene {
   // ------------------------------------------------------------------
   _onLandPlatform(ball, plat) {
     if (ball.body.bottom - plat.body.top > 20) {
-      // 下から当たった → 押し返す
       ball.setVelocityY(Math.abs(ball.body.velocity.y));
     } else {
-      // 上から乗った → 速度に応じて反発を下げる
       ball.setBounce(Math.abs(ball.body.velocity.y) < 200 ? 0.1 : 0.6);
     }
   }
@@ -239,9 +253,9 @@ export class GameScene extends Phaser.Scene {
 
     this._launcher.update(dt);
 
-    // 足場はエイミング中も生成して事前に見せる
     this._generatePlatforms();
     this._cleanupPlatforms();
+    this._generateCheckpoints();
 
     switch (this._state) {
       case 'aiming': {
@@ -264,10 +278,8 @@ export class GameScene extends Phaser.Scene {
     const by = this._ball.y;
     const vy = this._ball.body.velocity.y;
 
-    // 下方向 800px/s キャップ
     if (vy > 800) this._ball.setVelocityY(800);
 
-    // 頂点検出
     if (!this._pastApex && vy > 0) this._pastApex = true;
 
     // カメラ追従
@@ -286,7 +298,7 @@ export class GameScene extends Phaser.Scene {
     if (!this._meterText.visible) this._meterText.setVisible(true);
     this._meterText.setText(`↑ ${this._maxMeters}m`);
 
-    // 着地静止：低速 + onGround なら完全停止
+    // 着地静止
     const onGroundNow   = this._ball.body.blocked.down;
     const totalSpeedNow = Math.sqrt(
       this._ball.body.velocity.x ** 2 + this._ball.body.velocity.y ** 2,
@@ -296,12 +308,26 @@ export class GameScene extends Phaser.Scene {
       this._ball.setBounce(0);
     }
 
-    // スタック検知（3秒以上同じ高度 → ゲームオーバー）
+    // チェックポイント通過チェック
+    this._checkpoints.list.forEach(cp => {
+      if (!cp.reached &&
+          this._ball.y < cp.y + 50 &&
+          this._ball.y > cp.y - 50) {
+        cp.reached = true;
+        this._drawFlag(cp.gfx, cp.x, cp.y, true);
+        this._checkpoints.lastReachedY      = cp.y;
+        this._checkpoints.lastReachedHeight = cp.meters;
+        this._showCheckpointEffect();
+        soundManager.playSe('se_select');
+      }
+    });
+
+    // スタック検知
     if (Math.abs(by - this._lastStuckY) < 10) {
       this._stuckTimer += dt;
       if (this._stuckTimer > 3.0 && !this._gameOverFlag) {
         this._gameOverFlag = true;
-        this._triggerGameOver();
+        this._onFallDetected();
         return;
       }
     } else {
@@ -309,7 +335,6 @@ export class GameScene extends Phaser.Scene {
       this._lastStuckY = by;
     }
 
-    // ゲームオーバー / 再発射判定
     if (!this._launched || this._gameOverFlag) return;
 
     const vx         = this._ball.body.velocity.x;
@@ -324,10 +349,10 @@ export class GameScene extends Phaser.Scene {
     }
     const trulyStopped = this._restTimer >= 0.3;
 
-    // 優先1：発射台より下 → ゲームオーバー
+    // 優先1：発射台より下 → 落下判定
     if (fellBelow) {
       this._gameOverFlag = true;
-      this._triggerGameOver();
+      this._onFallDetected();
       return;
     }
     // 優先2：足場の上で静止 → 再発射
@@ -336,12 +361,207 @@ export class GameScene extends Phaser.Scene {
       this._triggerRelaunch();
       return;
     }
-    // 優先3：空中で静止 → ゲームオーバー
+    // 優先3：空中で静止 → 落下判定
     if (trulyStopped && !onGround && !fellBelow) {
       this._gameOverFlag = true;
-      this._triggerGameOver();
+      this._onFallDetected();
       return;
     }
+  }
+
+  // ------------------------------------------------------------------
+  // チェックポイント生成 / 描画
+  // ------------------------------------------------------------------
+  _generateCheckpoints() {
+    const targetY = this.cameras.main.scrollY - 200;
+    while (true) {
+      const cpY = LAUNCH_Y - this._nextCpM * COURSE.pxPerMeter;
+      if (cpY < targetY) break;   // カメラより上に達したら終了
+      this._spawnCheckpoint(cpY, this._nextCpM);
+      this._nextCpM += CP_INTERVAL_M;
+    }
+  }
+
+  _spawnCheckpoint(y, meters) {
+    const gfx = this.add.graphics().setDepth(12);
+    this._drawFlag(gfx, CP_X, y, false);
+
+    // 高度ラベル
+    const label = this.add.text(CP_X + CP_FLAG_W + 6, y - CP_POLE_H / 2, `${meters}m`, {
+      fontFamily: "'Press Start 2P'",
+      fontSize: '6px',
+      color: '#cccccc',
+    }).setDepth(12).setOrigin(0, 0.5);
+
+    this._checkpoints.list.push({ y, meters, reached: false, gfx, label, x: CP_X });
+  }
+
+  _drawFlag(gfx, x, y, gold) {
+    gfx.clear();
+    // ポール
+    gfx.fillStyle(0xaaaaaa, 1);
+    gfx.fillRect(x - 1, y - CP_POLE_H, 2, CP_POLE_H);
+    // 旗（三角形）
+    const fc = gold ? 0xffd700 : 0xffffff;
+    gfx.fillStyle(fc, 1);
+    gfx.fillTriangle(
+      x,              y - CP_POLE_H,
+      x + CP_FLAG_W,  y - CP_POLE_H + CP_FLAG_W * 0.5,
+      x,              y - CP_POLE_H + CP_FLAG_W,
+    );
+    // 金旗は輝きエッジ
+    if (gold) {
+      gfx.lineStyle(1, 0xfff0a0, 1);
+      gfx.strokeTriangle(
+        x,              y - CP_POLE_H,
+        x + CP_FLAG_W,  y - CP_POLE_H + CP_FLAG_W * 0.5,
+        x,              y - CP_POLE_H + CP_FLAG_W,
+      );
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // チェックポイント通過演出
+  // ------------------------------------------------------------------
+  _showCheckpointEffect() {
+    const h = this._checkpoints.lastReachedHeight;
+    const t = this.add.text(
+      GAME_WIDTH / 2,
+      GAME_HEIGHT * 0.3,
+      `CHECKPOINT!\n${h}m`,
+      {
+        fontFamily: "'Press Start 2P'",
+        fontSize:   '18px',
+        color:      '#FFD700',
+        stroke:     '#000000',
+        strokeThickness: 4,
+        align:      'center',
+      },
+    ).setOrigin(0.5).setScrollFactor(0).setDepth(40);
+
+    this.tweens.add({
+      targets:  t,
+      y:        GAME_HEIGHT * 0.2,
+      alpha:    0,
+      duration: 1500,
+      ease:     'Cubic.Out',
+      onComplete: () => t.destroy(),
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // 落下検知（チェックポイント有無で分岐）
+  // ------------------------------------------------------------------
+  _onFallDetected() {
+    this._trail.stop();
+    this._ball.setVelocity(0, 0);
+    this._ball.body.allowGravity = false;
+
+    if (this._checkpoints.lastReachedHeight > 0) {
+      this._showRetryUI();
+    } else {
+      this._triggerGameOver();
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // リトライ UI
+  // ------------------------------------------------------------------
+  _showRetryUI() {
+    this._retryUI = [];
+    const cx = GAME_WIDTH / 2;
+    const cy = GAME_HEIGHT / 2;
+
+    const bg = this.add.rectangle(cx, cy, 380, 210, 0x000000, 0.75)
+      .setScrollFactor(0).setDepth(50);
+    this._retryUI.push(bg);
+
+    // 枠線
+    const border = this.add.graphics().setScrollFactor(0).setDepth(50);
+    border.lineStyle(2, 0xffd700, 1);
+    border.strokeRect(cx - 190, cy - 105, 380, 210);
+    this._retryUI.push(border);
+
+    const title = this.add.text(cx, cy - 68, '落ちた！', {
+      fontFamily: "'Press Start 2P'",
+      fontSize: '18px',
+      color: '#ffffff',
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(51);
+    this._retryUI.push(title);
+
+    const h = this._checkpoints.lastReachedHeight;
+    const cpInfo = this.add.text(cx, cy - 28, `最終CP：${h}m`, {
+      fontFamily: "'Press Start 2P'",
+      fontSize: '12px',
+      color: '#FFD700',
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(51);
+    this._retryUI.push(cpInfo);
+
+    const bestInfo = this.add.text(cx, cy + 4, `最高記録：${this._maxMeters}m`, {
+      fontFamily: "'Press Start 2P'",
+      fontSize: '9px',
+      color: '#aaaaaa',
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(51);
+    this._retryUI.push(bestInfo);
+
+    // リトライボタン
+    const retryBg = this.add.rectangle(cx - 88, cy + 55, 160, 34, 0x00aa44)
+      .setScrollFactor(0).setDepth(51)
+      .setInteractive({ useHandCursor: true });
+    retryBg.on('pointerover',  () => retryBg.setFillStyle(0x00cc55));
+    retryBg.on('pointerout',   () => retryBg.setFillStyle(0x00aa44));
+    retryBg.on('pointerdown',  () => {
+      soundManager.playSe('se_select');
+      this._retryFromCheckpoint();
+    });
+    this._retryUI.push(retryBg);
+
+    const retryTxt = this.add.text(cx - 88, cy + 55, 'CPから再スタート', {
+      fontFamily: "'Press Start 2P'",
+      fontSize: '8px',
+      color: '#ffffff',
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(52);
+    this._retryUI.push(retryTxt);
+
+    // ギブアップボタン
+    const giveupBg = this.add.rectangle(cx + 88, cy + 55, 130, 34, 0xaa2222)
+      .setScrollFactor(0).setDepth(51)
+      .setInteractive({ useHandCursor: true });
+    giveupBg.on('pointerover',  () => giveupBg.setFillStyle(0xcc3333));
+    giveupBg.on('pointerout',   () => giveupBg.setFillStyle(0xaa2222));
+    giveupBg.on('pointerdown',  () => {
+      soundManager.playSe('se_select');
+      this._destroyRetryUI();
+      this._triggerGameOver();
+    });
+    this._retryUI.push(giveupBg);
+
+    const giveupTxt = this.add.text(cx + 88, cy + 55, 'ギブアップ', {
+      fontFamily: "'Press Start 2P'",
+      fontSize: '8px',
+      color: '#ffffff',
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(52);
+    this._retryUI.push(giveupTxt);
+  }
+
+  _destroyRetryUI() {
+    this._retryUI.forEach(obj => obj.destroy());
+    this._retryUI = [];
+  }
+
+  // ------------------------------------------------------------------
+  // CPからの再スタート
+  // ------------------------------------------------------------------
+  _retryFromCheckpoint() {
+    this._destroyRetryUI();
+    this._retryCount++;
+
+    this._relaunchPos  = { x: LAUNCH_X, y: this._checkpoints.lastReachedY };
+    this._isRelaunch   = true;
+    this._gameOverFlag = false;
+    this._launched     = false;
+
+    this._showLaunchUI();
   }
 
   // ------------------------------------------------------------------
@@ -376,9 +596,11 @@ export class GameScene extends Phaser.Scene {
   }
 
   _showLaunchUI() {
-    this._state     = 'aiming';
-    this._pastApex  = false;
-    this._restTimer = 0;
+    this._state      = 'aiming';
+    this._pastApex   = false;
+    this._restTimer  = 0;
+    this._stuckTimer = 0;
+    this._lastStuckY = 0;
     this._ball.setBounce(0.6);
 
     if (this._isRelaunch && this._relaunchPos) {
@@ -389,7 +611,10 @@ export class GameScene extends Phaser.Scene {
       this.cameras.main.setScroll(0, 0);
       this._launcher.start();
       this._clearAllPlatforms();
+      this._clearCheckpoints();
       this._nextPlatformY = LAUNCH_Y - SAFETY_ZONE_PX;
+      this._nextCpM       = CP_INTERVAL_M;
+      this._checkpoints   = { lastReachedY: LAUNCH_Y, lastReachedHeight: 0, list: [] };
     }
   }
 
@@ -398,21 +623,15 @@ export class GameScene extends Phaser.Scene {
     this._ball.setVelocity(0, 0);
     this._ball.body.allowGravity = false;
     this._clearAllPlatforms();
+    this._clearCheckpoints();
 
     this.time.delayedCall(800, () => {
       soundManager.stopBgm();
-      this.scene.start('ResultScene', { meters: this._maxMeters });
+      this.scene.start('ResultScene', {
+        meters:     this._maxMeters,
+        retryCount: this._retryCount,
+      });
     });
-  }
-
-  _clearAllPlatforms() {
-    this._platformGroup.clear(true, true);
-    // 移動足場はtweenを止めてから削除
-    this._movingGroup.getChildren().slice().forEach(p => {
-      this.tweens.killTweensOf(p);
-      p.destroy();
-    });
-    this._vanishGroup.clear(true, true);
   }
 
   // ------------------------------------------------------------------
@@ -479,7 +698,6 @@ export class GameScene extends Phaser.Scene {
   }
 
   _startVanishTimer(plat) {
-    // 2秒後に点滅開始
     this.time.delayedCall(VANISH_WARN, () => {
       if (!plat?.active) return;
       this.tweens.add({
@@ -487,7 +705,6 @@ export class GameScene extends Phaser.Scene {
         duration: 150, yoyo: true, repeat: 6,
       });
     });
-    // 3秒後に消滅
     this.time.delayedCall(VANISH_DELAY, () => {
       if (plat?.active) plat.destroy();
     });
@@ -509,9 +726,22 @@ export class GameScene extends Phaser.Scene {
       .filter(p => p.y > limit).forEach(p => p.destroy());
   }
 
-  // ------------------------------------------------------------------
-  // 消える足場タイマー
-  // ------------------------------------------------------------------
+  _clearAllPlatforms() {
+    this._platformGroup.clear(true, true);
+    this._movingGroup.getChildren().slice().forEach(p => {
+      this.tweens.killTweensOf(p);
+      p.destroy();
+    });
+    this._vanishGroup.clear(true, true);
+  }
+
+  _clearCheckpoints() {
+    this._checkpoints.list.forEach(cp => {
+      cp.gfx.destroy();
+      cp.label.destroy();
+    });
+    this._checkpoints.list = [];
+  }
 
   // ------------------------------------------------------------------
   // 描画ヘルパー

@@ -13,7 +13,8 @@ export class ResultScene extends Phaser.Scene {
   }
 
   init(data) {
-    this._meters = data.meters || 0;
+    this._meters     = data.meters     || 0;
+    this._retryCount = data.retryCount || 0;
   }
 
   create() {
@@ -41,23 +42,32 @@ export class ResultScene extends Phaser.Scene {
 
     if (isNew) {
       soundManager.playSe('se_record');
-      this.add.text(width / 2, height * 0.60, 'NEW RECORD!', {
+      this.add.text(width / 2, height * 0.58, 'NEW RECORD!', {
         fontFamily: "'Press Start 2P'", fontSize: '14px', color: '#ffd700',
         stroke: '#000', strokeThickness: 3,
       }).setOrigin(0.5);
     } else {
-      this.add.text(width / 2, height * 0.60, `🏆 最高：${best}m`, {
+      this.add.text(width / 2, height * 0.58, `🏆 最高：${best}m`, {
         fontFamily: "'Press Start 2P'", fontSize: '10px', color: CSS_COLORS.WHITE,
       }).setOrigin(0.5);
     }
 
-    this._createButton(width / 2, height * 0.74, 'もう一度', () => {
+    const retryLabel = this._retryCount === 0
+      ? 'ノーリトライ！'
+      : `リトライ：${this._retryCount}回`;
+    this.add.text(width / 2, height * 0.66, retryLabel, {
+      fontFamily: "'Press Start 2P'",
+      fontSize:   '9px',
+      color:      this._retryCount === 0 ? '#00ff88' : '#aaaaaa',
+    }).setOrigin(0.5);
+
+    this._createButton(width / 2, height * 0.78, 'もう一度', () => {
       soundManager.playSe('se_select');
       soundManager.stopBgm();
       this.scene.start('GameScene');
     });
 
-    this._createButton(width / 2, height * 0.86, 'シェアする', () => {
+    this._createButton(width / 2, height * 0.90, 'シェアする', () => {
       this._share(title);
     });
   }
