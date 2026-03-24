@@ -13,7 +13,6 @@ import {
   COLORS, CSS_COLORS,
   GAME_WIDTH, GAME_HEIGHT,
   LAUNCH, COURSE,
-  getBgColor,
 } from '../config.js';
 import { LaunchController } from '../objects/LaunchController.js';
 import { TrailEffect } from '../objects/TrailEffect.js';
@@ -48,10 +47,30 @@ const MOVING_DURATION = 1500;
 const VANISH_DELAY    = 3000;
 const VANISH_WARN     = 2000;
 
-// ---- 足場カラー ----
-const COLOR_NORMAL  = 0x44cc66;
+// ---- 足場カラー（移動・消えるは固定色で種別識別） ----
 const COLOR_MOVING  = 0x74b9ff;
 const COLOR_VANISH  = 0xff9f43;
+
+// ---- 背景グラデーション ----
+const BG_COLORS = [
+  { height:    0, color: 0xe8f4f8, name: '地上' },
+  { height:  100, color: 0xc8e6c9, name: '草原' },
+  { height:  200, color: 0xb3d9f7, name: '空' },
+  { height:  350, color: 0x9b59b6, name: '高層' },
+  { height:  500, color: 0x6b2d8b, name: '宇宙の入口' },
+  { height:  700, color: 0x2d1b4e, name: '暗黒' },
+  { height:  900, color: 0x8b0000, name: '地獄の入口' },
+  { height: 1000, color: 0x1a0000, name: '地獄' },
+];
+
+function getPlatformColor(meters) {
+  if (meters < 100) return 0x7bc67e;
+  if (meters < 200) return 0x5bafd6;
+  if (meters < 350) return 0x9b59b6;
+  if (meters < 500) return 0xe67e22;
+  if (meters < 700) return 0xe74c3c;
+  return 0x555555;
+}
 
 // ---- チェックポイント ----
 const CP_INTERVAL_M = 100;   // 100mごとにCP
@@ -73,13 +92,13 @@ export class GameScene extends Phaser.Scene {
 
     this._createTextures();
 
-    // ---- 背景 ----
+    // ---- 背景（スクリーン固定・Tweenで色変化） ----
     const wallCY = GAME_HEIGHT / 2 - WALL_H / 2;
     this._bgRect = this.add.rectangle(
-      GAME_WIDTH / 2, wallCY,
-      GAME_WIDTH, WALL_H + GAME_HEIGHT,
-      COLORS.BG_SKY,
-    ).setDepth(0);
+      GAME_WIDTH / 2, GAME_HEIGHT / 2,
+      GAME_WIDTH, GAME_HEIGHT,
+      BG_COLORS[0].color,
+    ).setDepth(0).setScrollFactor(0);
 
     // ---- 壁（静的ボディ） ----
     this._walls = this.physics.add.staticGroup();
@@ -204,6 +223,7 @@ export class GameScene extends Phaser.Scene {
     this._relaunchPos    = null;
     this._maxMeters      = 0;
     this._maxHeight      = 0;
+    this._currentBgIndex = 0;
     this._pastApex       = false;
     this._restTimer      = 0;
     this._stuckTimer     = 0;
@@ -343,7 +363,23 @@ export class GameScene extends Phaser.Scene {
     if (currentHeight > this._maxHeight) {
       this._maxHeight = currentHeight;
       this._maxMeters = Math.floor(this._maxHeight / COURSE.pxPerMeter);
-      this._bgRect.setFillStyle(getBgColor(this._maxMeters));
+
+      // 背景ゾーン判定
+      let targetIdx = 0;
+      for (let i = 0; i < BG_COLORS.length; i++) {
+        if (this._maxMeters >= BG_COLORS[i].height) targetIdx = i;
+      }
+      if (targetIdx !== this._currentBgIndex) {
+        this._currentBgIndex = targetIdx;
+        this.tweens.killTweensOf(this._bgRect);
+        this.tweens.add({
+          targets:   this._bgRect,
+          fillColor: BG_COLORS[targetIdx].color,
+          duration:  2000,
+          ease:      'Linear',
+        });
+        this._showZoneName(BG_COLORS[targetIdx].name);
+      }
     }
     if (!this._meterText.visible) this._meterText.setVisible(true);
     this._meterText.setText(`↑ ${this._maxMeters}m`);
@@ -497,6 +533,28 @@ export class GameScene extends Phaser.Scene {
       alpha:    0,
       duration: 1500,
       ease:     'Cubic.Out',
+      onComplete: () => t.destroy(),
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // ゾーン名表示
+  // ------------------------------------------------------------------
+  _showZoneName(name) {
+    const t = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT * 0.68, name, {
+      fontFamily: "'Press Start 2P'",
+      fontSize:   '14px',
+      color:      '#ffffff',
+      stroke:     '#000000',
+      strokeThickness: 4,
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(35).setAlpha(0);
+
+    this.tweens.add({
+      targets:  t,
+      alpha:    { from: 0, to: 1 },
+      duration: 500,
+      yoyo:     true,
+      hold:     1000,
       onComplete: () => t.destroy(),
     });
   }
@@ -729,14 +787,14 @@ export class GameScene extends Phaser.Scene {
     } else if (meters >= MOVING_START_M && Math.random() < 0.3) {
       this._spawnMovingPlatform(x, y, w);
     } else {
-      this._spawnNormalPlatform(x, y, w);
+      this._spawnNormalPlatform(x, y, w, getPlatformColor(meters));
     }
   }
 
-  _spawnNormalPlatform(x, y, w) {
+  _spawnNormalPlatform(x, y, w, color = 0x7bc67e) {
     this._platformGroup.create(x, y, 'wallPx')
       .setDisplaySize(w, PLATFORM_H)
-      .setTint(COLOR_NORMAL)
+      .setTint(color)
       .refreshBody();
   }
 
