@@ -54,7 +54,7 @@ export class ResultScene extends Phaser.Scene {
     this._createButton(width / 2, height * 0.74, 'もう一度', () => {
       soundManager.playSe('se_select');
       soundManager.stopBgm();
-      this.scene.start('TestScene');
+      this.scene.start('GameScene');
     });
 
     this._createButton(width / 2, height * 0.86, 'シェアする', () => {

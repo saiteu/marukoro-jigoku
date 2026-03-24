@@ -49,7 +49,7 @@ export const LAUNCH = {
   angleMin:        10,   // 最小角度（度）
   angleMax:        170,  // 最大角度（度）
   angleSpeed:      90,   // ゲージ往復速度（度/秒）
-  powerMax:        1400, // MAX時の初速（px/s）
+  powerMax:        2000, // MAX時の初速（px/s）
   powerChargeTime: 1.5,  // 0→100%にかかる時間（秒）
   launchPadX:      GAME_WIDTH / 2,
   launchPadY:      GAME_HEIGHT - 60,

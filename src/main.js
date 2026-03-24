@@ -3,6 +3,8 @@
  * エントリーポイント・Phaser初期化
  */
 import Phaser from 'phaser';
+import { TitleScene } from './scenes/TitleScene.js';
+import { GameScene } from './scenes/GameScene.js';
 import { ResultScene } from './scenes/ResultScene.js';
 import { TestScene } from './scenes/TestScene.js';
 import { GAME_WIDTH, GAME_HEIGHT } from './config.js';
@@ -15,9 +17,7 @@ const config = {
   backgroundColor: '#e8f4f8',
   pixelArt: true,
   antialias: false,
-  // TestScene で動作確認中。確認後は TitleScene に戻す
-  // ※ GameScene は Matter.js 依存のため Arcade Physics 移行後に別途対応
-  scene: [TestScene, ResultScene],
+  scene: [TitleScene, GameScene, ResultScene, TestScene],
   physics: {
     default: 'arcade',
     arcade: {
