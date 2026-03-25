@@ -187,7 +187,7 @@ export class GameScene extends Phaser.Scene {
           if (cp._flagGfx) this._drawFlag(cp._flagGfx, cp._flagX, cp.y - PLATFORM_H / 2, true);
           this._checkpoints.lastReachedY      = cp.y - PLATFORM_H / 2 - RADIUS;
           this._checkpoints.lastReachedHeight = cp.meters;
-          this._showCheckpointEffect();
+          this._showCheckpointEffect(cp);
           soundManager.playSe('se_checkpoint');
         }
       },
@@ -352,7 +352,7 @@ export class GameScene extends Phaser.Scene {
   // ------------------------------------------------------------------
   // update
   // ------------------------------------------------------------------
-  update(time, delta) {
+  update(_time, delta) {
     const dt = Math.min(delta / 1000, 0.05);
 
     if (this._bounceSeCooldown > 0) this._bounceSeCooldown -= delta;
@@ -431,11 +431,20 @@ export class GameScene extends Phaser.Scene {
       if (targetIdx !== this._currentBgIndex) {
         this._currentBgIndex = targetIdx;
         this.tweens.killTweensOf(this._bgRect);
-        this.tweens.add({
-          targets:   this._bgRect,
-          fillColor: BG_COLORS[targetIdx].color,
-          duration:  2000,
-          ease:      'Linear',
+        const fromColor = Phaser.Display.Color.IntegerToColor(this._bgRect.fillColor);
+        const toColor   = Phaser.Display.Color.IntegerToColor(BG_COLORS[targetIdx].color);
+        this.tweens.addCounter({
+          from:     0,
+          to:       1,
+          duration: 2000,
+          ease:     'Linear',
+          onUpdate: (tween) => {
+            const t = tween.getValue();
+            const r = Math.round(fromColor.red   + (toColor.red   - fromColor.red)   * t);
+            const g = Math.round(fromColor.green + (toColor.green - fromColor.green) * t);
+            const b = Math.round(fromColor.blue  + (toColor.blue  - fromColor.blue)  * t);
+            this._bgRect.setFillStyle(Phaser.Display.Color.GetColor(r, g, b));
+          },
         });
         this._showZoneName(BG_COLORS[targetIdx].name);
       }
@@ -570,30 +579,86 @@ export class GameScene extends Phaser.Scene {
   // ------------------------------------------------------------------
   // チェックポイント通過演出
   // ------------------------------------------------------------------
-  _showCheckpointEffect() {
-    const h = this._checkpoints.lastReachedHeight;
-    const t = this.add.text(
-      GAME_WIDTH / 2,
-      GAME_HEIGHT * 0.3,
-      `CHECKPOINT!\n${h}m`,
+  _showCheckpointEffect(cp) {
+    const cam = this.cameras.main;
+
+    // ---- 1. テキストポップアップ ----
+    const startY = cam.centerY - 50 + cam.scrollY;
+    const endY1  = cam.centerY - 100 + cam.scrollY;
+    const endY2  = cam.centerY - 150 + cam.scrollY;
+    const cpText = this.add.text(
+      cam.centerX,
+      startY,
+      'CHECKPOINT!',
       {
-        fontFamily: "'Press Start 2P'",
-        fontSize:   '18px',
-        color:      '#FFD700',
-        stroke:     '#000000',
-        strokeThickness: 4,
-        align:      'center',
+        fontSize: '28px',
+        color:    '#FFD700',
+        stroke:   '#000000',
+        strokeThickness: 5,
       },
-    ).setOrigin(0.5).setScrollFactor(0).setDepth(40);
+    ).setOrigin(0.5).setScrollFactor(0).setDepth(40).setAlpha(0).setScale(0.5);
 
     this.tweens.add({
-      targets:  t,
-      y:        GAME_HEIGHT * 0.2,
-      alpha:    0,
-      duration: 1500,
-      ease:     'Cubic.Out',
-      onComplete: () => t.destroy(),
+      targets:  cpText,
+      alpha:    1,
+      scale:    1,
+      y:        endY1,
+      duration: 300,
+      ease:     'Back.easeOut',
+      onComplete: () => {
+        this.tweens.add({
+          targets:  cpText,
+          alpha:    0,
+          y:        endY2,
+          duration: 500,
+          delay:    1000,
+          onComplete: () => cpText.destroy(),
+        });
+      },
     });
+
+    // ---- 2. CP足場が白く光る ----
+    if (cp) {
+      this.tweens.addCounter({
+        from:     0,
+        to:       1,
+        duration: 100,
+        yoyo:     true,
+        repeat:   2,
+        onUpdate: (tween) => {
+          const v = tween.getValue();
+          const r = Math.round(0xff);
+          const g = Math.round(0x8c + (0xff - 0x8c) * (1 - v));
+          const b = Math.round(0x00 + 0xff * (1 - v));
+          cp.setTint(Phaser.Display.Color.GetColor(r, g, b));
+        },
+        onComplete: () => cp.setTint(0xff8c00),
+      });
+    }
+
+    // ---- 3. パーティクル（Phaser 3.60+ API）----
+    if (cp) {
+      const px = cp.x;
+      const py = cp.y;
+      const key = '__cpParticle';
+      if (!this.textures.exists(key)) {
+        const g = this.make.graphics({ x: 0, y: 0, add: false });
+        g.fillStyle(0xffffff, 1);
+        g.fillCircle(4, 4, 4);
+        g.generateTexture(key, 8, 8);
+        g.destroy();
+      }
+      const emitter = this.add.particles(px, py, key, {
+        speed:    { min: 50, max: 150 },
+        angle:    { min: 240, max: 300 },
+        scale:    { start: 0.8, end: 0 },
+        lifespan: 800,
+        quantity: 15,
+        tint:     [0xFFD700, 0xFFFFFF, 0xFF8C00],
+        gravityY: 200,
+      }).setDepth(35);
+      this.time.delayedCall(200, () => emitter.destroy());
+    }
   }
 
   // ------------------------------------------------------------------
@@ -1003,7 +1068,7 @@ export class GameScene extends Phaser.Scene {
     }
     this._checkpoints.lastReachedY      = nearest.y - PLATFORM_H / 2 - RADIUS;
     this._checkpoints.lastReachedHeight = nearest.meters;
-    this._showCheckpointEffect();
+    this._showCheckpointEffect(nearest);
     soundManager.playSe('se_checkpoint');
   }
 
