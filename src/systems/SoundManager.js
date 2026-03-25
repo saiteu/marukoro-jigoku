@@ -1,20 +1,23 @@
 /**
  * サウンド管理
- * mp3ファイルがあればそれを再生、なければWeb Audio APIで8bitサウンドを生成
+ * 実ファイル（ogg/wav/mp3）があればそれを再生、なければWeb Audio APIで生成
+ * BGM: .ogg → .mp3 の順で試みる
+ * SE:  .wav → .mp3 の順で試みる
  */
 
 export class SoundManager {
   constructor() {
-    this._ctx = null;
-    this._bgmSource = null;
-    this._bgmGain = null;
-    this._seGain = null;
-    this._bgmVolume = 0.4;
-    this._seVolume = 0.6;
-    this._enabled = true;
-    this._currentBgm = null;
-    this._bgmBuffers = {};
-    this._unlocked = false;
+    this._ctx          = null;
+    this._bgmSource    = null;
+    this._bgmGain      = null;
+    this._seGain       = null;
+    this._bgmVolume    = 0.5;
+    this._seVolume     = 0.7;
+    this._enabled      = true;
+    this._currentBgm   = null;
+    this._unlocked     = false;
+    this._bufferCache  = {};   // URL → AudioBuffer キャッシュ
+    this._bgmLoopId    = null;
   }
 
   // ユーザーインタラクション後に呼ぶ（自動再生ポリシー対策）
@@ -22,6 +25,7 @@ export class SoundManager {
     if (this._unlocked) return;
     try {
       this._ctx = new (window.AudioContext || window.webkitAudioContext)();
+
       this._bgmGain = this._ctx.createGain();
       this._bgmGain.gain.value = this._bgmVolume;
       this._bgmGain.connect(this._ctx.destination);
@@ -30,9 +34,7 @@ export class SoundManager {
       this._seGain.gain.value = this._seVolume;
       this._seGain.connect(this._ctx.destination);
 
-      if (this._ctx.state === 'suspended') {
-        await this._ctx.resume();
-      }
+      if (this._ctx.state === 'suspended') await this._ctx.resume();
       this._unlocked = true;
     } catch (e) {
       console.warn('SoundManager: AudioContext初期化失敗', e);
@@ -41,41 +43,37 @@ export class SoundManager {
 
   setEnabled(enabled) {
     this._enabled = enabled;
-    if (this._bgmGain) {
-      this._bgmGain.gain.value = enabled ? this._bgmVolume : 0;
-    }
-    if (this._seGain) {
-      this._seGain.gain.value = enabled ? this._seVolume : 0;
-    }
+    if (this._bgmGain) this._bgmGain.gain.value = enabled ? this._bgmVolume : 0;
+    if (this._seGain)  this._seGain.gain.value  = enabled ? this._seVolume  : 0;
   }
 
-  isEnabled() {
-    return this._enabled;
-  }
+  isEnabled() { return this._enabled; }
 
-  // BGM再生（ループ）
+  // ------------------------------------------------------------------
+  // BGM 再生（ループ）
+  // ------------------------------------------------------------------
   async playBgm(key) {
-    if (!this._unlocked || !this._enabled) return;
+    if (!this._unlocked) return;
     if (this._currentBgm === key) return;
     this.stopBgm();
+    this._currentBgm = key;
 
-    try {
-      // まずmp3を試みる
-      const buffer = await this._loadAudioFile(`/assets/sounds/${key}.mp3`);
+    if (!this._enabled) return;
+
+    // .ogg → .mp3 の順で試みる
+    for (const ext of ['.ogg', '.mp3']) {
+      const buffer = await this._loadAudioFile(`/assets/sounds/${key}${ext}`);
       if (buffer) {
         this._playBuffer(buffer, true, this._bgmGain);
-        this._currentBgm = key;
         return;
       }
-    } catch {
-      // ファイルなし→フォールバック
     }
-    // Web Audio APIで生成
+    // ファイルなし → 生成音
     this._playGeneratedBgm(key);
-    this._currentBgm = key;
   }
 
   stopBgm() {
+    if (this._bgmLoopId) { clearTimeout(this._bgmLoopId); this._bgmLoopId = null; }
     if (this._bgmSource) {
       try { this._bgmSource.stop(); } catch {}
       this._bgmSource = null;
@@ -83,41 +81,57 @@ export class SoundManager {
     this._currentBgm = null;
   }
 
-  // SE再生
+  // ------------------------------------------------------------------
+  // SE 再生
+  // ------------------------------------------------------------------
   async playSe(key) {
     if (!this._unlocked || !this._enabled) return;
-    try {
-      const buffer = await this._loadAudioFile(`/assets/sounds/${key}.mp3`);
+
+    // .wav → .mp3 の順で試みる
+    for (const ext of ['.wav', '.mp3']) {
+      const buffer = await this._loadAudioFile(`/assets/sounds/${key}${ext}`);
       if (buffer) {
         this._playBuffer(buffer, false, this._seGain);
         return;
       }
-    } catch {}
+    }
+    // ファイルなし → 生成音
     this._playGeneratedSe(key);
   }
 
+  // ------------------------------------------------------------------
+  // 内部: ファイルロード（キャッシュ付き）
+  // ------------------------------------------------------------------
   async _loadAudioFile(url) {
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const arrayBuffer = await res.arrayBuffer();
-    return await this._ctx.decodeAudioData(arrayBuffer);
+    if (this._bufferCache[url] !== undefined) return this._bufferCache[url];
+    try {
+      const res = await fetch(url);
+      if (!res.ok) { this._bufferCache[url] = null; return null; }
+      const ab = await res.arrayBuffer();
+      const buf = await this._ctx.decodeAudioData(ab);
+      this._bufferCache[url] = buf;
+      return buf;
+    } catch {
+      this._bufferCache[url] = null;
+      return null;
+    }
   }
 
   _playBuffer(buffer, loop, gainNode) {
     const source = this._ctx.createBufferSource();
     source.buffer = buffer;
-    source.loop = loop;
+    source.loop   = loop;
     source.connect(gainNode);
     source.start();
     if (loop) this._bgmSource = source;
     return source;
   }
 
-  // ---- Web Audio API フォールバック音源生成 ----
-
+  // ------------------------------------------------------------------
+  // Web Audio API フォールバック音源生成
+  // ------------------------------------------------------------------
   _playGeneratedBgm(key) {
     if (!this._ctx) return;
-    // シンプルなメロディループをスケジューリング
     const melodies = {
       bgm_title: [
         [523, 0.2], [659, 0.2], [784, 0.2], [1047, 0.4],
@@ -130,12 +144,6 @@ export class SoundManager {
         [494, 0.1], [440, 0.1], [392, 0.2], [0, 0.1],
         [330, 0.1], [294, 0.1], [330, 0.2], [0, 0.1],
         [440, 0.15], [494, 0.15], [587, 0.3], [0, 0.2],
-      ],
-      bgm_hell: [
-        [220, 0.15], [233, 0.15], [220, 0.15], [196, 0.3],
-        [174, 0.15], [185, 0.15], [196, 0.3], [0, 0.15],
-        [220, 0.1], [247, 0.1], [294, 0.1], [330, 0.3],
-        [294, 0.1], [247, 0.1], [220, 0.4], [0, 0.2],
       ],
       bgm_result: [
         [523, 0.15], [659, 0.15], [784, 0.15], [1047, 0.4],
@@ -150,13 +158,10 @@ export class SoundManager {
       if (this._currentBgm !== key) return;
       let t = this._ctx.currentTime;
       for (const [freq, dur] of melody) {
-        if (freq > 0) {
-          this._beep(freq, dur * 0.85, t, this._bgmGain, 'square', 0.08);
-        }
+        if (freq > 0) this._beep(freq, dur * 0.85, t, this._bgmGain, 'square', 0.08);
         t += dur;
       }
-      const id = setTimeout(loop, totalDuration * 1000 - 50);
-      this._bgmLoopId = id;
+      this._bgmLoopId = setTimeout(loop, totalDuration * 1000 - 50);
     };
     loop();
   }
@@ -166,64 +171,47 @@ export class SoundManager {
     const t = this._ctx.currentTime;
     const g = this._seGain;
     switch (key) {
-      case 'se_charge':
-        // パワーゲージ充填中：高い周波数のビープが繰り返す
-        this._beep(440 + Math.random() * 200, 0.04, t, g, 'square', 0.15);
-        break;
       case 'se_launch':
-        // 発射：ドーン！低音→高音の急上昇
-        this._beep(80, 0.06, t, g, 'sawtooth', 0.5);
+        this._beep(80,  0.06, t,        g, 'sawtooth', 0.5);
         this._beep(160, 0.06, t + 0.04, g, 'sawtooth', 0.45);
         this._beep(320, 0.08, t + 0.08, g, 'sawtooth', 0.4);
         this._noise(0.12, t, g, 0.3);
         break;
       case 'se_bounce':
-        // バウンド：短い打撃音
-        this._beep(220, 0.03, t, g, 'square', 0.35);
+        this._beep(220, 0.03, t,        g, 'square', 0.35);
         this._beep(330, 0.04, t + 0.02, g, 'square', 0.25);
         this._noise(0.04, t, g, 0.2);
         break;
-      case 'se_spring':
-        // バネ：高くポヨーン
-        this._beep(440, 0.03, t, g, 'square', 0.35);
-        this._beep(660, 0.03, t + 0.03, g, 'square', 0.35);
-        this._beep(880, 0.04, t + 0.06, g, 'square', 0.35);
-        this._beep(1175, 0.06, t + 0.10, g, 'square', 0.3);
-        break;
-      case 'se_warp':
-        // ワープ：ビュイーン
-        this._beep(220, 0.08, t, g, 'sawtooth', 0.3);
-        this._beep(440, 0.08, t + 0.06, g, 'sawtooth', 0.3);
-        this._beep(880, 0.1, t + 0.12, g, 'sawtooth', 0.25);
-        this._beep(440, 0.08, t + 0.22, g, 'sawtooth', 0.2);
-        break;
       case 'se_land':
-        // 着地（力尽き）：ドスン
         this._noise(0.12, t, g, 0.35);
         this._beep(110, 0.1, t, g, 'sawtooth', 0.3);
         break;
+      case 'se_checkpoint':
+        [523, 659, 784, 1047].forEach((f, i) => {
+          this._beep(f, 0.1, t + i * 0.08, g, 'square', 0.25);
+        });
+        break;
+      case 'se_retry':
+        this._beep(440, 0.06, t,        g, 'square', 0.25);
+        this._beep(330, 0.06, t + 0.07, g, 'square', 0.25);
+        this._beep(220, 0.1,  t + 0.14, g, 'square', 0.3);
+        break;
+      case 'se_select':
+        this._beep(660, 0.05, t,        g, 'square', 0.2);
+        this._beep(880, 0.05, t + 0.05, g, 'square', 0.2);
+        break;
       case 'se_record':
-        // 記録更新：ファンファーレ
         [523, 659, 784, 1047, 1319].forEach((f, i) => {
           this._beep(f, 0.12, t + i * 0.09, g, 'square', 0.28);
         });
         break;
-      case 'se_select':
-        this._beep(660, 0.05, t, g, 'square', 0.2);
-        this._beep(880, 0.05, t + 0.05, g, 'square', 0.2);
-        break;
-      case 'se_select':
-        this._beep(660, 0.05, t, g, 'square', 0.2);
-        this._beep(880, 0.05, t + 0.05, g, 'square', 0.2);
+      case 'se_charge':
+        this._beep(440 + Math.random() * 200, 0.04, t, g, 'square', 0.15);
         break;
       case 'se_start':
         [330, 392, 494, 659].forEach((f, i) => {
           this._beep(f, 0.08, t + i * 0.07, g, 'square', 0.28);
         });
-        break;
-      // 旧キー（互換性のため残す）
-      case 'se_jump':
-        this._beep(440, 0.05, t, g, 'square', 0.25);
         break;
       default:
         this._beep(440, 0.05, t, g, 'square', 0.2);
@@ -244,20 +232,18 @@ export class SoundManager {
   }
 
   _noise(dur, startTime, gainNode, volume = 0.2) {
-    const bufferSize = this._ctx.sampleRate * dur;
-    const buffer = this._ctx.createBuffer(1, bufferSize, this._ctx.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) {
-      data[i] = (Math.random() * 2 - 1) * volume;
-    }
-    const source = this._ctx.createBufferSource();
-    source.buffer = buffer;
+    const bufSize = Math.floor(this._ctx.sampleRate * dur);
+    const buf  = this._ctx.createBuffer(1, bufSize, this._ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < bufSize; i++) data[i] = (Math.random() * 2 - 1) * volume;
+    const src = this._ctx.createBufferSource();
+    src.buffer = buf;
     const env = this._ctx.createGain();
     env.gain.setValueAtTime(volume, startTime);
     env.gain.exponentialRampToValueAtTime(0.001, startTime + dur);
-    source.connect(env);
+    src.connect(env);
     env.connect(gainNode);
-    source.start(startTime);
+    src.start(startTime);
   }
 }
 

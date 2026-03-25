@@ -132,6 +132,10 @@ export class GameScene extends Phaser.Scene {
       if (ball.body.blocked.left || ball.body.blocked.right) {
         // 左右の壁：高反発を維持
         ball.setBounce(0.7);
+        if (this._bounceSeCooldown <= 0) {
+          soundManager.playSe('se_bounce');
+          this._bounceSeCooldown = 100;
+        }
       } else {
         // 床：速度に応じて反発を下げる
         ball.setBounce(Math.abs(ball.body.velocity.y) < 200 ? 0.1 : 0.6);
@@ -179,7 +183,7 @@ export class GameScene extends Phaser.Scene {
           this._checkpoints.lastReachedY      = cp.y - PLATFORM_H / 2 - RADIUS;
           this._checkpoints.lastReachedHeight = cp.meters;
           this._showCheckpointEffect();
-          soundManager.playSe('se_select');
+          soundManager.playSe('se_checkpoint');
         }
       },
     );
@@ -213,6 +217,10 @@ export class GameScene extends Phaser.Scene {
     this.input.keyboard.on('keydown-SPACE', () => this._onConfirm());
     this.input.keyboard.on('keydown-ESC',   () => this._returnToTitle());
     this.input.on('pointerdown',            () => this._onConfirm());
+
+    // ---- SE クールダウン ----
+    this._bounceSeCooldown = 0;
+    this._landSeCooldown   = 0;
 
     // ---- 状態 ----
     this._state          = 'aiming';
@@ -280,7 +288,12 @@ export class GameScene extends Phaser.Scene {
     if (ball.body.bottom - plat.body.top > 20) {
       ball.setVelocityY(Math.abs(ball.body.velocity.y));
     } else {
-      ball.setBounce(Math.abs(ball.body.velocity.y) < 200 ? 0.1 : 0.6);
+      const vy = Math.abs(ball.body.velocity.y);
+      ball.setBounce(vy < 200 ? 0.1 : 0.6);
+      if (vy < 400 && this._landSeCooldown <= 0) {
+        soundManager.playSe('se_land');
+        this._landSeCooldown = 500;
+      }
     }
   }
 
@@ -312,6 +325,9 @@ export class GameScene extends Phaser.Scene {
   // ------------------------------------------------------------------
   update(time, delta) {
     const dt = Math.min(delta / 1000, 0.05);
+
+    if (this._bounceSeCooldown > 0) this._bounceSeCooldown -= delta;
+    if (this._landSeCooldown   > 0) this._landSeCooldown   -= delta;
 
     this._launcher.update(dt);
 
@@ -637,7 +653,7 @@ export class GameScene extends Phaser.Scene {
     retryBg.on('pointerover',  () => retryBg.setFillStyle(0x00cc55));
     retryBg.on('pointerout',   () => retryBg.setFillStyle(0x00aa44));
     retryBg.on('pointerdown',  () => {
-      soundManager.playSe('se_select');
+      soundManager.playSe('se_retry');
       this._retryFromCheckpoint();
     });
     this._retryUI.push(retryBg);
@@ -945,7 +961,7 @@ export class GameScene extends Phaser.Scene {
     this._checkpoints.lastReachedY      = nearest.y - PLATFORM_H / 2 - RADIUS;
     this._checkpoints.lastReachedHeight = nearest.meters;
     this._showCheckpointEffect();
-    soundManager.playSe('se_select');
+    soundManager.playSe('se_checkpoint');
   }
 
   // ------------------------------------------------------------------
