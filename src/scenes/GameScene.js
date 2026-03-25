@@ -21,6 +21,11 @@ import { soundManager } from '../systems/SoundManager.js';
 // URLパラメータ ?debug=true でデバッグモード有効
 const DEBUG_MODE = new URLSearchParams(window.location.search).get('debug') === 'true';
 
+// ---- 空中横移動 ----
+const AIR_ACCEL     = 20;
+const AIR_MAX_SPEED = 400;
+const AIR_DRAG      = 0.92;
+
 const LAUNCH_X = LAUNCH.launchPadX;
 const LAUNCH_Y = LAUNCH.launchPadY;
 const RADIUS   = 18;
@@ -218,6 +223,30 @@ export class GameScene extends Phaser.Scene {
     this.input.keyboard.on('keydown-ESC',   () => this._returnToTitle());
     this.input.on('pointerdown',            () => this._onConfirm());
 
+    // ---- 空中横移動 キー ----
+    this._cursors   = this.input.keyboard.createCursorKeys();
+    this._keyA      = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.A);
+    this._keyD      = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D);
+
+    // ---- 空中横移動 モバイル ----
+    this._mobileLeft  = false;
+    this._mobileRight = false;
+    this.input.on('pointermove', (pointer) => {
+      if (this._state !== 'flying') return;
+      if (!pointer.isDown) return;
+      if (pointer.x < this.scale.width / 2) {
+        this._mobileLeft  = true;
+        this._mobileRight = false;
+      } else {
+        this._mobileLeft  = false;
+        this._mobileRight = true;
+      }
+    });
+    this.input.on('pointerup', () => {
+      this._mobileLeft  = false;
+      this._mobileRight = false;
+    });
+
     // ---- SE クールダウン ----
     this._bounceSeCooldown = 0;
     this._landSeCooldown   = 0;
@@ -355,6 +384,20 @@ export class GameScene extends Phaser.Scene {
   // フライト tick
   // ------------------------------------------------------------------
   _tickFlying(dt) {
+    // ---- 空中横移動 ----
+    const body = this._ball.body;
+    const goLeft  = this._cursors.left.isDown  || this._keyA.isDown || this._mobileLeft;
+    const goRight = this._cursors.right.isDown || this._keyD.isDown || this._mobileRight;
+
+    if (goLeft) {
+      body.velocity.x = Math.max(body.velocity.x - AIR_ACCEL, -AIR_MAX_SPEED);
+    } else if (goRight) {
+      body.velocity.x = Math.min(body.velocity.x + AIR_ACCEL,  AIR_MAX_SPEED);
+    } else {
+      body.velocity.x *= AIR_DRAG;
+      if (Math.abs(body.velocity.x) < 5) body.velocity.x = 0;
+    }
+
     const by = this._ball.y;
     const vy = this._ball.body.velocity.y;
 
