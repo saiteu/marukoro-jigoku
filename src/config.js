@@ -80,18 +80,24 @@ export const COURSE = {
 
 // ---- 称号テーブル ----
 export const TITLES = [
-  { minM:   0, maxM:  50,  title: '地上をウロウロ' },
-  { minM:  50, maxM: 150,  title: '空への第一歩' },
-  { minM: 150, maxM: 300,  title: '雲の上まで来た' },
-  { minM: 300, maxM: 500,  title: '成層圏突破' },
-  { minM: 500, maxM: 9999, title: '地獄旅行完結' },
+  { height:    0, title: '地上をウロウロ',  emoji: '🐌' },
+  { height:   50, title: '空への第一歩',    emoji: '🐥' },
+  { height:  100, title: 'まだまだこれから', emoji: '🌱' },
+  { height:  200, title: '雲の上まで来た',  emoji: '☁️' },
+  { height:  350, title: '成層圏突破',      emoji: '🚀' },
+  { height:  500, title: '地獄の入口に到達', emoji: '🔥' },
+  { height:  700, title: '業火の中を進む',  emoji: '😈' },
+  { height:  900, title: '奈落の底まで来た', emoji: '💀' },
+  { height: 1000, title: '地獄旅行完結',    emoji: '👑' },
 ];
 
+/** 高度に応じた称号オブジェクト { title, emoji } を返す */
 export function getTitle(meters) {
+  let current = TITLES[0];
   for (const t of TITLES) {
-    if (meters < t.maxM) return t.title;
+    if (meters >= t.height) current = t;
   }
-  return TITLES[TITLES.length - 1].title;
+  return current;
 }
 
 // ---- 背景グラデーション（高度→色） ----

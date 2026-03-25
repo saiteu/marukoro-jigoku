@@ -187,6 +187,9 @@ export class GameScene extends Phaser.Scene {
           if (cp._flagGfx) this._drawFlag(cp._flagGfx, cp._flagX, cp.y - PLATFORM_H / 2, true);
           this._checkpoints.lastReachedY      = cp.y - PLATFORM_H / 2 - RADIUS;
           this._checkpoints.lastReachedHeight = cp.meters;
+          // デッドゾーンをCP高度に更新
+          this._deadZoneY = cp.y;
+          this._updateDeadZone(cp.y);
           this._showCheckpointEffect(cp);
           soundManager.playSe('se_checkpoint');
         }
@@ -276,6 +279,11 @@ export class GameScene extends Phaser.Scene {
     this._nextCpM    = CP_INTERVAL_M;
     this._retryCount = 0;
     this._retryUI    = [];
+
+    // ---- デッドゾーン ----
+    this._deadZoneY     = LAUNCH_Y + 100;
+    this._returningFlag = false;
+    this._createDeadZone();
 
     // ---- デバッグ ----
     this._debug      = DEBUG_MODE;
@@ -480,7 +488,7 @@ export class GameScene extends Phaser.Scene {
     const vx         = this._ball.body.velocity.x;
     const totalSpeed = Math.sqrt(vx * vx + vy * vy);
     const onGround   = this._ball.body.blocked.down;
-    const fellBelow  = by > LAUNCH_Y;
+    const fellBelow  = by > this._deadZoneY + 50;
 
     if (totalSpeed < 30) {
       this._restTimer += dt;
@@ -662,6 +670,94 @@ export class GameScene extends Phaser.Scene {
   }
 
   // ------------------------------------------------------------------
+  // デッドゾーン
+  // ------------------------------------------------------------------
+  _createDeadZone() {
+    const initY = this._deadZoneY;
+
+    // 赤い半透明エリア（ライン下の広いゾーン）
+    this._deadZoneRect = this.add.rectangle(
+      GAME_WIDTH / 2, initY + 200,
+      GAME_WIDTH, 400,
+      0xff0000, 0.18,
+    ).setScrollFactor(1).setDepth(2);
+
+    // 境界ライン
+    this._deadZoneLine = this.add.rectangle(
+      GAME_WIDTH / 2, initY,
+      GAME_WIDTH, 4,
+      0xff0000, 0.8,
+    ).setScrollFactor(1).setDepth(3);
+
+    // DEAD ZONEテキスト
+    this._deadZoneText = this.add.text(
+      GAME_WIDTH / 2, initY + 18,
+      '⚠ DEAD ZONE',
+      { fontSize: '11px', color: '#ff4444', stroke: '#000000', strokeThickness: 2 },
+    ).setOrigin(0.5).setScrollFactor(1).setDepth(3);
+  }
+
+  _updateDeadZone(newY) {
+    this.tweens.add({
+      targets:  this._deadZoneLine,
+      y:        newY,
+      duration: 500,
+      ease:     'Power2',
+    });
+    this.tweens.add({
+      targets:  this._deadZoneText,
+      y:        newY + 18,
+      duration: 500,
+      ease:     'Power2',
+    });
+    this.tweens.add({
+      targets:  this._deadZoneRect,
+      y:        newY + 200,
+      duration: 500,
+      ease:     'Power2',
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // 強制送還
+  // ------------------------------------------------------------------
+  _forcedReturn() {
+    if (this._returningFlag) return;
+    this._returningFlag = true;
+    this._retryCount++;
+
+    const msg = this.add.text(
+      this.cameras.main.centerX,
+      this.cameras.main.centerY,
+      '📍 チェックポイントに戻る',
+      { fontSize: '18px', color: '#ffffff', stroke: '#000000', strokeThickness: 4 },
+    ).setOrigin(0.5).setScrollFactor(0).setDepth(50);
+
+    this.time.delayedCall(800, () => {
+      msg.destroy();
+      const cpY = this._checkpoints.lastReachedY;
+
+      this.cameras.main.pan(
+        GAME_WIDTH / 2, cpY, 500, 'Power2', false,
+        (_cam, progress) => {
+          if (progress === 1) {
+            this._returningFlag  = false;
+            this._relaunchPos    = { x: LAUNCH_X, y: cpY };
+            this._isRelaunch     = true;
+            this._gameOverFlag   = false;
+            this._launched       = false;
+            this._restTimer      = 0;
+            this._stuckTimer     = 0;
+            this._lastStuckY     = cpY;
+            this._ball.body.allowGravity = true;
+            this.time.delayedCall(50, () => this._showLaunchUI());
+          }
+        },
+      );
+    });
+  }
+
+  // ------------------------------------------------------------------
   // ゾーン名表示
   // ------------------------------------------------------------------
   _showZoneName(name) {
@@ -708,7 +804,7 @@ export class GameScene extends Phaser.Scene {
     this._ball.body.allowGravity = false;
 
     if (this._checkpoints.lastReachedHeight > 0) {
-      this._showRetryUI();
+      this._forcedReturn();
     } else {
       this._triggerGameOver();
     }
@@ -869,6 +965,9 @@ export class GameScene extends Phaser.Scene {
       this._nextPlatformY = LAUNCH_Y - SAFETY_ZONE_PX;
       this._nextCpM       = CP_INTERVAL_M;
       this._checkpoints   = { lastReachedY: LAUNCH_Y, lastReachedHeight: 0, list: [] };
+      // デッドゾーンを初期位置に戻す
+      this._deadZoneY = LAUNCH_Y + 100;
+      this._updateDeadZone(LAUNCH_Y + 100);
     }
   }
 
