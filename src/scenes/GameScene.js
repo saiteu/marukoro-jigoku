@@ -1095,16 +1095,8 @@ export class GameScene extends Phaser.Scene {
     this._ball.setVelocity(0, 0);
     this._ball.body.allowGravity = false;
 
-    const text = this.add.text(
-      this.cameras.main.centerX,
-      this.cameras.main.centerY - 50,
-      'もう一度とばす！',
-      { fontFamily: 'monospace', fontSize: '16px', color: '#ffffff',
-        stroke: '#000000', strokeThickness: 4 },
-    ).setOrigin(0.5).setScrollFactor(0).setDepth(30);
-
-    this.time.delayedCall(500, () => {
-      text.destroy();
+    // メッセージなし・200ms後に即ゲージ表示
+    this.time.delayedCall(200, () => {
       this._ball.body.allowGravity = true;
       this._relaunchFlag = false;
       this._gameOverFlag = false;
