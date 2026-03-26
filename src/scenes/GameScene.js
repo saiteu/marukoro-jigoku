@@ -14,7 +14,6 @@ import {
   GAME_WIDTH, GAME_HEIGHT,
   LAUNCH, COURSE,
 } from '../config.js';
-import { LaunchController } from '../objects/LaunchController.js';
 import { TrailEffect } from '../objects/TrailEffect.js';
 import { soundManager } from '../systems/SoundManager.js';
 
@@ -199,9 +198,14 @@ export class GameScene extends Phaser.Scene {
     // ---- エフェクト ----
     this._trail = new TrailEffect(this);
 
-    // ---- 発射コントローラー ----
-    this._launcher = new LaunchController(this);
-    this._launcher.start();
+    // ---- 射出 UI グラフィクス ----
+    this._trajectoryGfx = this.add.graphics().setDepth(20).setScrollFactor(1);
+    this._hintText = this.add.text(
+      GAME_WIDTH / 2, GAME_HEIGHT - 20,
+      '←→: 角度   長押し: チャージ   離す: 発射',
+      { fontFamily: "'Press Start 2P'", fontSize: '7px', color: '#ffffff',
+        stroke: '#000', strokeThickness: 2 },
+    ).setOrigin(0.5, 1).setDepth(21).setScrollFactor(0).setVisible(false);
 
     // ---- UI ----
     this._meterText = this.add.text(12, 12, '', {
@@ -221,33 +225,56 @@ export class GameScene extends Phaser.Scene {
       soundBtn.setText(en ? '🔊' : '🔇');
     });
 
-    // ---- 入力 ----
-    this.input.keyboard.on('keydown-SPACE', () => this._onConfirm());
-    this.input.keyboard.on('keydown-ESC',   () => this._returnToTitle());
-    this.input.on('pointerdown',            () => this._onConfirm());
-
-    // ---- 空中横移動 キー ----
+    // ---- キーボード ----
+    this.input.keyboard.on('keydown-ESC', () => this._returnToTitle());
     this._cursors   = this.input.keyboard.createCursorKeys();
     this._keyA      = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.A);
     this._keyD      = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D);
+    this._spaceKey  = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
 
-    // ---- 空中横移動 モバイル ----
+    // ---- ポインター（各1回だけ登録）----
     this._mobileLeft  = false;
     this._mobileRight = false;
+
+    this.input.on('pointerdown', (pointer) => {
+      if (this._state !== 'aiming') return;
+      if (!this._canLaunch) return;
+      this._isCharging  = true;
+      this._chargeStart = this.time.now;
+      this._aimPower    = 400;
+      this._updateAimAngle(pointer);
+    });
+
     this.input.on('pointermove', (pointer) => {
-      if (this._state !== 'flying') return;
-      if (!pointer.isDown) return;
-      if (pointer.x < this.scale.width / 2) {
-        this._mobileLeft  = true;
-        this._mobileRight = false;
-      } else {
-        this._mobileLeft  = false;
-        this._mobileRight = true;
+      if (this._state === 'flying') {
+        if (!pointer.isDown) return;
+        if (pointer.x < this.scale.width / 2) {
+          this._mobileLeft = true; this._mobileRight = false;
+        } else {
+          this._mobileLeft = false; this._mobileRight = true;
+        }
+        return;
+      }
+      // エイム中：長押しで角度追従
+      if (this._state === 'aiming' && this._isCharging && pointer.isDown) {
+        this._updateAimAngle(pointer);
       }
     });
+
     this.input.on('pointerup', () => {
+      // 飛行中：モバイル横移動停止
       this._mobileLeft  = false;
       this._mobileRight = false;
+      // エイム中：発射
+      if (this._state !== 'aiming') return;
+      if (!this._isCharging || !this._canLaunch) return;
+      if (this.time.now - this._chargeStart < 300) {
+        this._isCharging = false;
+        this._aimPower   = 400;
+        return;
+      }
+      this._isCharging = false;
+      this._doLaunch();
     });
 
     // ---- SE クールダウン ----
@@ -258,6 +285,15 @@ export class GameScene extends Phaser.Scene {
     this._state          = 'aiming';
     this._launched       = false;
     this._gameOverFlag   = false;
+    this._launchTime     = 0;
+
+    // ---- 射出状態 ----
+    this._canLaunch      = false;   // 発射可能か
+    this._isCharging     = false;   // マウス/タッチチャージ中か
+    this._isKeyCharging  = false;   // キーボードチャージ中か
+    this._aimAngle       = 90;      // 現在の角度
+    this._aimPower       = 400;     // 現在のパワー
+    this._chargeStart    = 0;       // チャージ開始時刻
     this._relaunchFlag   = false;
     this._isRelaunch     = false;
     this._relaunchPos    = null;
@@ -293,6 +329,9 @@ export class GameScene extends Phaser.Scene {
     this._keyC       = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.C);
     this._keyCPrev   = false;
     if (this._debug) this._setupDebugMode();
+
+    // ゲーム開始時に発射可能状態に
+    this._showLaunchUI();
   }
 
   // ------------------------------------------------------------------
@@ -337,21 +376,6 @@ export class GameScene extends Phaser.Scene {
   // ------------------------------------------------------------------
   // 入力
   // ------------------------------------------------------------------
-  _onConfirm() {
-    if (this._state !== 'aiming') return;
-    const vel = this._launcher.confirm();
-    if (vel) {
-      this._ball.body.allowGravity = true;
-      this._ball.setVelocity(vel.vx, vel.vy);
-      this._trail.start();
-      this._state        = 'flying';
-      this._launched     = true;
-      this._gameOverFlag = false;
-      this._isRelaunch   = false;
-      soundManager.playSe('se_launch');
-    }
-  }
-
   _returnToTitle() {
     soundManager.stopBgm();
     this.scene.start('TitleScene');
@@ -366,8 +390,6 @@ export class GameScene extends Phaser.Scene {
     if (this._bounceSeCooldown > 0) this._bounceSeCooldown -= delta;
     if (this._landSeCooldown   > 0) this._landSeCooldown   -= delta;
 
-    this._launcher.update(dt);
-
     this._generatePlatforms();
     this._cleanupPlatforms();
     this._generateCheckpoints();
@@ -377,6 +399,7 @@ export class GameScene extends Phaser.Scene {
         const aimX = (this._isRelaunch && this._relaunchPos) ? this._relaunchPos.x : LAUNCH_X;
         const aimY = (this._isRelaunch && this._relaunchPos) ? this._relaunchPos.y : LAUNCH_Y;
         this._ball.body.reset(aimX, aimY);
+        this._tickAiming();
         break;
       }
       case 'flying':
@@ -386,6 +409,122 @@ export class GameScene extends Phaser.Scene {
     }
 
     if (this._debug) this._tickDebug();
+  }
+
+  // ------------------------------------------------------------------
+  // エイム tick（update の aiming case から呼ぶ）
+  // ------------------------------------------------------------------
+  _tickAiming() {
+    if (!this._canLaunch) {
+      this._trajectoryGfx.clear();
+      return;
+    }
+
+    // 左右キーで角度調整
+    if (this._cursors.left.isDown || this._keyA.isDown) {
+      this._aimAngle = Math.min(170, this._aimAngle + 2);
+    }
+    if (this._cursors.right.isDown || this._keyD.isDown) {
+      this._aimAngle = Math.max(10, this._aimAngle - 2);
+    }
+
+    // ---- キーボードチャージ（スペース）----
+    if (this._spaceKey.isDown) {
+      if (!this._isKeyCharging) {
+        this._isKeyCharging = true;
+        this._chargeStart   = this.time.now;
+      }
+      this._aimPower = Math.min(2000, this._aimPower + 12);
+    } else if (this._isKeyCharging) {
+      // スペースを離した → 300ms以上なら発射
+      this._isKeyCharging = false;
+      if (this.time.now - this._chargeStart >= 300 && this._canLaunch) {
+        this._doLaunch();
+        return;
+      }
+      // 300ms未満はキャンセル
+      this._aimPower = 400;
+    }
+
+    // ---- マウス/タッチチャージ：パワー増加のみ（発射はpointerupで行う）----
+    if (this._isCharging) {
+      this._aimPower = Math.min(2000, this._aimPower + 12);
+    }
+
+    this._drawTrajectory();
+  }
+
+  _doLaunch() {
+    if (!this._canLaunch) return;
+    this._canLaunch     = false;
+    this._isCharging    = false;
+    this._isKeyCharging = false;
+
+    // 発射直後500ms は入力を無効化（誤発火防止）
+    this.input.enabled = false;
+    this.time.delayedCall(500, () => { this.input.enabled = true; });
+
+    const rad = Phaser.Math.DegToRad(this._aimAngle);
+    const vx  =  Math.cos(rad) * this._aimPower;
+    const vy  = -Math.sin(rad) * this._aimPower;
+
+    this._ball.body.allowGravity = true;
+    this._ball.setVelocity(vx, vy);
+    this._trail.start();
+    this._trajectoryGfx.clear();
+    this._hintText.setVisible(false);
+
+    this._state        = 'flying';
+    this._launched     = true;
+    this._gameOverFlag = false;
+    this._isRelaunch   = false;
+    this._launchTime   = this.time.now;
+    this._aimPower     = 400;
+
+    soundManager.playSe('se_launch');
+  }
+
+  _drawTrajectory() {
+    this._trajectoryGfx.clear();
+    const ox  = this._ball.x;
+    const oy  = this._ball.y;
+    const rad = Phaser.Math.DegToRad(this._aimAngle);
+    const g   = this.physics.world.gravity.y / 3600;
+
+    let x   = ox;
+    let y   = oy;
+    let dvx =  Math.cos(rad) * this._aimPower / 60;
+    let dvy = -Math.sin(rad) * this._aimPower / 60;
+
+    for (let i = 0; i < 25; i++) {
+      x += dvx;
+      y += dvy;
+      dvy += g;
+      if (i % 2 === 0) {
+        const alpha = Math.max(0, 0.8 - i * 0.03);
+        this._trajectoryGfx.fillStyle(0xffffff, alpha);
+        this._trajectoryGfx.fillCircle(x, y, 3);
+      }
+    }
+
+    // パワーゲージ（ボール右横）
+    const ratio = (this._aimPower - 400) / (2000 - 400);
+    const barH  = 60;
+    const barW  = 8;
+    const bx    = ox + 25;
+    const by    = oy - barH / 2;
+    this._trajectoryGfx.fillStyle(0x222222, 0.8);
+    this._trajectoryGfx.fillRect(bx, by, barW, barH);
+    const fc = ratio < 0.5 ? 0x00ff00 : ratio < 0.8 ? 0xffff00 : 0xff0000;
+    this._trajectoryGfx.fillStyle(fc, 1);
+    this._trajectoryGfx.fillRect(bx, by + barH * (1 - ratio), barW, barH * ratio);
+  }
+
+  _updateAimAngle(pointer) {
+    const dx    = pointer.worldX - this._ball.x;
+    const dy    = pointer.worldY - this._ball.y;
+    const angle = Phaser.Math.RadToDeg(Math.atan2(-dy, dx));
+    this._aimAngle = Phaser.Math.Clamp(angle, 10, 170);
   }
 
   // ------------------------------------------------------------------
@@ -484,6 +623,9 @@ export class GameScene extends Phaser.Scene {
     }
 
     if (!this._launched || this._gameOverFlag) return;
+
+    // 発射直後1秒間はゲームオーバー判定をスキップ
+    if (this.time.now - this._launchTime < 1000) return;
 
     const vx         = this._ball.body.velocity.x;
     const totalSpeed = Math.sqrt(vx * vx + vy * vy);
@@ -806,8 +948,35 @@ export class GameScene extends Phaser.Scene {
     if (this._checkpoints.lastReachedHeight > 0) {
       this._forcedReturn();
     } else {
-      this._triggerGameOver();
+      // CP未通過：リザルトに飛ばさずスタート地点から再発射
+      this._returnToStart();
     }
+  }
+
+  // ------------------------------------------------------------------
+  // スタート地点へ戻る（CP未通過時の落下）
+  // ------------------------------------------------------------------
+  _returnToStart() {
+    if (this._returningFlag) return;
+    this._returningFlag = true;
+    this._retryCount++;
+
+    const msg = this.add.text(
+      this.cameras.main.centerX,
+      this.cameras.main.centerY,
+      'やり直し！スタートへ戻る...',
+      { fontSize: '16px', color: '#ffffff', stroke: '#000000', strokeThickness: 4 },
+    ).setOrigin(0.5).setScrollFactor(0).setDepth(50);
+
+    this.time.delayedCall(1000, () => {
+      msg.destroy();
+      this._returningFlag = false;
+      this._isRelaunch    = false;
+      this._relaunchPos   = null;
+      this._gameOverFlag  = false;
+      this._launched      = false;
+      this._showLaunchUI();
+    });
   }
 
   // ------------------------------------------------------------------
@@ -953,13 +1122,19 @@ export class GameScene extends Phaser.Scene {
     this._lastStuckY = 0;
     this._ball.setBounce(0.7);
 
+    // 射出状態リセット
+    this._canLaunch     = true;
+    this._isCharging    = false;
+    this._isKeyCharging = false;
+    this._aimAngle      = 90;
+    this._aimPower      = 400;
+    this._hintText.setVisible(true);
+
     if (this._isRelaunch && this._relaunchPos) {
       const scrollY = this._relaunchPos.y - GAME_HEIGHT * 0.55;
       this.cameras.main.setScroll(0, scrollY);
-      this._launcher.start(this._relaunchPos.x, GAME_HEIGHT * 0.55);
     } else {
       this.cameras.main.setScroll(0, 0);
-      this._launcher.start();
       this._clearAllPlatforms();
       this._clearCheckpoints();
       this._nextPlatformY = LAUNCH_Y - SAFETY_ZONE_PX;
@@ -972,6 +1147,11 @@ export class GameScene extends Phaser.Scene {
   }
 
   _triggerGameOver() {
+    if (this._gameOverFlag && this._state !== 'flying') return;  // 多重発火防止
+    this._gameOverFlag = true;
+    this._canLaunch    = false;
+    this.input.enabled = false;   // 以降の入力を遮断
+
     this._trail.stop();
     this._ball.setVelocity(0, 0);
     this._ball.body.allowGravity = false;
