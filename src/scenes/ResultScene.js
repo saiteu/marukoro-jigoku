@@ -29,10 +29,10 @@ export class ResultScene extends Phaser.Scene {
     // ---- NEW RECORD演出 ----
     if (isNew) {
       soundManager.playSe('se_record');
-      const rec = this.add.text(W / 2, H * 0.13, '🏆 NEW RECORD! 🏆', {
-        fontSize: '20px',
-        color:    '#FFD700',
-        stroke:   '#000000',
+      const rec = this.add.text(W / 2, 80, '🏆 NEW RECORD! 🏆', {
+        fontSize:        '22px',
+        color:           '#FFD700',
+        stroke:          '#000000',
         strokeThickness: 4,
       }).setOrigin(0.5);
 
@@ -46,58 +46,64 @@ export class ResultScene extends Phaser.Scene {
     }
 
     // ---- 到達高度 ----
-    this.add.text(W / 2, H * 0.30, `${this._meters}m`, {
-      fontFamily: "'Press Start 2P'",
-      fontSize:   '52px',
-      color:      '#ffffff',
-      stroke:     '#000000',
+    this.add.text(W / 2, 160, `${this._meters}m`, {
+      fontFamily:      "'Press Start 2P'",
+      fontSize:        '72px',
+      color:           '#ffffff',
+      stroke:          '#000000',
       strokeThickness: 6,
     }).setOrigin(0.5);
 
-    // ---- 称号（emoji付き） ----
-    this.add.text(W / 2, H * 0.46, `${titleData.emoji} ${titleData.title}`, {
-      fontSize: '20px',
-      color:    '#FFD700',
-      stroke:   '#000000',
+    // ---- 称号 ----
+    this.add.text(W / 2, 260, `${titleData.emoji} ${titleData.title}`, {
+      fontSize:        '20px',
+      color:           '#FFD700',
+      stroke:          '#000000',
       strokeThickness: 4,
+    }).setOrigin(0.5);
+
+    // ---- コメント ----
+    this.add.text(W / 2, 305, titleData.comment, {
+      fontSize: '14px',
+      color:    '#aaaaaa',
     }).setOrigin(0.5);
 
     // ---- リトライ回数 ----
     const retryLabel = this._retryCount === 0 ? 'ノーリトライ！' : `リトライ：${this._retryCount}回`;
-    this.add.text(W / 2, H * 0.56, retryLabel, {
+    this.add.text(W / 2, 345, retryLabel, {
       fontFamily: "'Press Start 2P'",
       fontSize:   '9px',
       color:      this._retryCount === 0 ? '#00ff88' : '#aaaaaa',
     }).setOrigin(0.5);
 
     // ---- 最高記録 ----
-    this.add.text(W / 2, H * 0.63, `最高記録：${best}m`, {
+    this.add.text(W / 2, 380, `最高記録：${best}m`, {
       fontFamily: "'Press Start 2P'",
       fontSize:   '10px',
-      color:      '#aaaaaa',
+      color:      '#888888',
     }).setOrigin(0.5);
 
     // ---- もう一度ボタン ----
-    this._createButton(W / 2, H * 0.76, '🔄 もう一度旅に出る', 0x444444, 0x666666, () => {
+    this._createButton(W / 2, 450, '🔄 もう一度旅に出る', 0x444444, 0x666666, () => {
       soundManager.playSe('se_select');
       soundManager.stopBgm();
       this.scene.start('GameScene');
     });
 
     // ---- シェアボタン ----
-    this._createButton(W / 2, H * 0.88, '🐦 地獄を報告する', 0x1a8cd8, 0x1DA1F2, () => {
+    this._createButton(W / 2, 510, '🐦 地獄を報告する', 0x1a8cd8, 0x1DA1F2, () => {
       soundManager.playSe('se_select');
       this._share(titleData);
     });
   }
 
   _createButton(x, y, label, colorNormal, colorHover, onClick) {
-    const bg = this.add.rectangle(x, y, 240, 40, colorNormal)
+    const bg = this.add.rectangle(x, y, 260, 44, colorNormal)
       .setInteractive({ useHandCursor: true });
     const text = this.add.text(x, y, label, {
-      fontSize: '14px',
-      color:    '#ffffff',
-      stroke:   '#000000',
+      fontSize:        '14px',
+      color:           '#ffffff',
+      stroke:          '#000000',
       strokeThickness: 3,
     }).setOrigin(0.5);
 
@@ -112,6 +118,7 @@ export class ResultScene extends Phaser.Scene {
     const text =
       `まるころ地獄旅行で${this._meters}mまで到達！\n` +
       `${titleData.emoji}「${titleData.title}」\n` +
+      `${titleData.comment}\n` +
       `#まるころ地獄旅行 #死にゲー`;
     window.open(
       `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`,

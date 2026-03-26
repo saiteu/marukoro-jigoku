@@ -80,15 +80,14 @@ export const COURSE = {
 
 // ---- 称号テーブル ----
 export const TITLES = [
-  { height:    0, title: '地上をウロウロ',  emoji: '🐌' },
-  { height:   50, title: '空への第一歩',    emoji: '🐥' },
-  { height:  100, title: 'まだまだこれから', emoji: '🌱' },
-  { height:  200, title: '雲の上まで来た',  emoji: '☁️' },
-  { height:  350, title: '成層圏突破',      emoji: '🚀' },
-  { height:  500, title: '地獄の入口に到達', emoji: '🔥' },
-  { height:  700, title: '業火の中を進む',  emoji: '😈' },
-  { height:  900, title: '奈落の底まで来た', emoji: '💀' },
-  { height: 1000, title: '地獄旅行完結',    emoji: '👑' },
+  { height:    0, title: '地上をウロウロ',   emoji: '🐌', comment: 'まだまだこれから！' },
+  { height:   50, title: '空への第一歩',     emoji: '🐥', comment: 'いい感じ！' },
+  { height:  150, title: '雲の上まで来た',   emoji: '☁️', comment: 'なかなかやるね' },
+  { height:  300, title: '成層圏突破',       emoji: '🚀', comment: 'すごい！' },
+  { height:  500, title: '地獄の入口に到達', emoji: '🔥', comment: 'ここからが本番…' },
+  { height:  700, title: '業火の中を進む',   emoji: '😈', comment: 'もう人間じゃない' },
+  { height:  900, title: '奈落の底まで来た', emoji: '💀', comment: '化け物か？' },
+  { height: 1000, title: '地獄旅行完結',     emoji: '👑', comment: '伝説になった' },
 ];
 
 /** 高度に応じた称号オブジェクト { title, emoji } を返す */
