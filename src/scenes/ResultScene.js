@@ -1,7 +1,8 @@
 import Phaser from 'phaser';
-import { CSS_COLORS, COLORS, getTitle } from '../config.js';
+import { CSS_COLORS, COLORS } from '../config.js';
 import { soundManager } from '../systems/SoundManager.js';
 import { saveManager } from '../systems/SaveManager.js';
+import { i18n } from '../i18n/index.js';
 
 export class ResultScene extends Phaser.Scene {
   constructor() {
@@ -11,6 +12,7 @@ export class ResultScene extends Phaser.Scene {
   init(data) {
     this._meters     = data.meters     || 0;
     this._retryCount = data.retryCount || 0;
+    this._livesLeft  = data.livesLeft  ?? 0;
   }
 
   create() {
@@ -20,7 +22,7 @@ export class ResultScene extends Phaser.Scene {
     soundManager.playBgm('bgm_result');
 
     const isNew     = saveManager.submitScore(this._meters);
-    const titleData = getTitle(this._meters);
+    const titleData = i18n.getTitle(this._meters);
     const best      = saveManager.getHighScore();
 
     // ---- 背景 ----
@@ -29,7 +31,7 @@ export class ResultScene extends Phaser.Scene {
     // ---- NEW RECORD演出 ----
     if (isNew) {
       soundManager.playSe('se_record');
-      const rec = this.add.text(W / 2, 80, '🏆 NEW RECORD! 🏆', {
+      const rec = this.add.text(W / 2, 80, i18n.t('newRecord'), {
         fontSize:        '22px',
         color:           '#FFD700',
         stroke:          '#000000',
@@ -46,7 +48,7 @@ export class ResultScene extends Phaser.Scene {
     }
 
     // ---- 到達高度 ----
-    this.add.text(W / 2, 160, `${this._meters}m`, {
+    this.add.text(W / 2, 160, `${this._meters}${i18n.t('meters')}`, {
       fontFamily:      "'Press Start 2P'",
       fontSize:        '72px',
       color:           '#ffffff',
@@ -69,29 +71,38 @@ export class ResultScene extends Phaser.Scene {
     }).setOrigin(0.5);
 
     // ---- リトライ回数 ----
-    const retryLabel = this._retryCount === 0 ? 'ノーリトライ！' : `リトライ：${this._retryCount}回`;
+    const retryLabel = this._retryCount === 0
+      ? i18n.t('noRetry')
+      : i18n.t('retryLabel', { n: this._retryCount });
     this.add.text(W / 2, 345, retryLabel, {
       fontFamily: "'Press Start 2P'",
       fontSize:   '9px',
       color:      this._retryCount === 0 ? '#00ff88' : '#aaaaaa',
     }).setOrigin(0.5);
 
+    // ---- 残ライフ ----
+    const livesStr = '♥'.repeat(this._livesLeft) + '♡'.repeat(5 - this._livesLeft);
+    this.add.text(W / 2, 370, `${i18n.t('livesLeft')}：${livesStr}`, {
+      fontSize: '16px',
+      color:    '#ff4444',
+    }).setOrigin(0.5);
+
     // ---- 最高記録 ----
-    this.add.text(W / 2, 380, `最高記録：${best}m`, {
+    this.add.text(W / 2, 410, `${i18n.t('bestHeight')}：${best}${i18n.t('meters')}`, {
       fontFamily: "'Press Start 2P'",
       fontSize:   '10px',
       color:      '#888888',
     }).setOrigin(0.5);
 
     // ---- もう一度ボタン ----
-    this._createButton(W / 2, 450, '🔄 もう一度旅に出る', 0x444444, 0x666666, () => {
+    this._createButton(W / 2, 470, i18n.t('retry'), 0x444444, 0x666666, () => {
       soundManager.playSe('se_select');
       soundManager.stopBgm();
       this.scene.start('GameScene');
     });
 
     // ---- シェアボタン ----
-    this._createButton(W / 2, 510, '🐦 地獄を報告する', 0x1a8cd8, 0x1DA1F2, () => {
+    this._createButton(W / 2, 530, i18n.t('share'), 0x1a8cd8, 0x1DA1F2, () => {
       soundManager.playSe('se_select');
       this._share(titleData);
     });
@@ -115,11 +126,16 @@ export class ResultScene extends Phaser.Scene {
   }
 
   _share(titleData) {
-    const text =
-      `まるころ地獄旅行で${this._meters}mまで到達！\n` +
-      `${titleData.emoji}「${titleData.title}」\n` +
-      `${titleData.comment}\n` +
-      `#まるころ地獄旅行 #死にゲー`;
+    const text = i18n.lang === 'ja'
+      ? `まるころ地獄旅行で${this._meters}mまで到達！\n` +
+        `${titleData.emoji}「${titleData.title}」\n` +
+        `${titleData.comment}\n` +
+        `#まるころ地獄旅行 #MaRuKoRoHellTrip`
+      : `I reached ${this._meters}m in MARUKORO HELL TRIP!\n` +
+        `${titleData.emoji} "${titleData.title}"\n` +
+        `${titleData.comment}\n` +
+        `#MaRuKoRoHellTrip #indiegame`;
+
     window.open(
       `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`,
       '_blank',

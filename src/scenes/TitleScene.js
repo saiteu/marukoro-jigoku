@@ -6,6 +6,7 @@ import { COLORS, CSS_COLORS } from '../config.js';
 import { soundManager } from '../systems/SoundManager.js';
 import { saveManager } from '../systems/SaveManager.js';
 import { drawPlayer, FACE } from '../utils/DrawUtils.js';
+import { i18n } from '../i18n/index.js';
 
 export class TitleScene extends Phaser.Scene {
   constructor() {
@@ -24,8 +25,8 @@ export class TitleScene extends Phaser.Scene {
     this._flames = [];
     this._createFlameParticles();
 
-    // タイトルロゴ
-    this.add.text(width / 2, height * 0.18, 'まるころ', {
+    // タイトルロゴ（2行）
+    this.add.text(width / 2, height * 0.18, i18n.t('titleLine1'), {
       fontFamily: "'Press Start 2P'",
       fontSize: '28px',
       color: CSS_COLORS.ORANGE,
@@ -33,7 +34,7 @@ export class TitleScene extends Phaser.Scene {
       strokeThickness: 4,
     }).setOrigin(0.5);
 
-    this.add.text(width / 2, height * 0.27, '地獄旅行', {
+    this.add.text(width / 2, height * 0.27, i18n.t('titleLine2'), {
       fontFamily: "'Press Start 2P'",
       fontSize: '28px',
       color: CSS_COLORS.FLAME,
@@ -41,7 +42,7 @@ export class TitleScene extends Phaser.Scene {
       strokeThickness: 4,
     }).setOrigin(0.5);
 
-    this.add.text(width / 2, height * 0.36, '〜どこまで飛べるか〜', {
+    this.add.text(width / 2, height * 0.36, i18n.t('subtitle'), {
       fontFamily: "'Press Start 2P'",
       fontSize: '7px',
       color: CSS_COLORS.UI_TEXT,
@@ -50,7 +51,7 @@ export class TitleScene extends Phaser.Scene {
     // ハイスコア表示
     const best = saveManager.getHighScore();
     if (best > 0) {
-      this.add.text(width / 2, height * 0.43, `🏆 最高記録：${best}m`, {
+      this.add.text(width / 2, height * 0.43, `${i18n.t('bestScore')}：${best}${i18n.t('meters')}`, {
         fontFamily: "'Press Start 2P'",
         fontSize: '9px',
         color: CSS_COLORS.YELLOW,
@@ -64,11 +65,14 @@ export class TitleScene extends Phaser.Scene {
     this._playerBob = 0;
 
     // ボタン
-    this._createButton(width / 2, height * 0.72, 'あそぶ', () => {
+    this._createButton(width / 2, height * 0.72, i18n.t('btnStart'), () => {
       soundManager.playSe('se_start');
       soundManager.stopBgm();
       this.scene.start('GameScene');
     });
+
+    // 言語切り替えボタン
+    this._createLangToggle();
 
     // 音量トグル
     this._createSoundToggle();
@@ -105,6 +109,28 @@ export class TitleScene extends Phaser.Scene {
     });
 
     return { bg, text };
+  }
+
+  _createLangToggle() {
+    const { width } = this.scale;
+    const label = i18n.lang === 'ja' ? 'EN' : 'JP';
+    const btn = this.add.text(width - 16, 50, label, {
+      fontFamily: "'Press Start 2P'",
+      fontSize: '11px',
+      color: '#ffffff',
+      stroke: '#000000',
+      strokeThickness: 3,
+      backgroundColor: '#334455',
+      padding: { x: 6, y: 4 },
+    }).setOrigin(1, 0).setInteractive({ useHandCursor: true });
+
+    btn.on('pointerover', () => btn.setAlpha(0.75));
+    btn.on('pointerout',  () => btn.setAlpha(1));
+    btn.on('pointerdown', () => {
+      i18n.setLang(i18n.lang === 'ja' ? 'en' : 'ja');
+      this.scene.restart();
+    });
+    return btn;
   }
 
   _createSoundToggle() {
@@ -160,7 +186,6 @@ export class TitleScene extends Phaser.Scene {
         f.life = 0;
       }
       const alpha = 1 - f.life / f.maxLife;
-      // CSS_COLORS.FLAME を数値に変換
       this._flameGfx.fillStyle(0xff6348, alpha * 0.7);
       this._flameGfx.fillCircle(f.x, f.y, f.size * (1 - f.life / f.maxLife));
     }
