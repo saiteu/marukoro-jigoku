@@ -23,7 +23,7 @@ import { HELL_ZONES, getZoneByHeight } from '../config/hellZones.js';
 const DEBUG_MODE = new URLSearchParams(window.location.search).get('debug') === 'true';
 
 // ---- ライフ ----
-const MAX_LIVES = 5;
+const MAX_LIVES = 2;
 
 // ---- 空中横移動 ----
 const AIR_ACCEL     = 20;
@@ -37,12 +37,25 @@ const WALL_H   = 8000;
 const WALL_W   = 30;
 
 // ---- 足場共通 ----
-const PLATFORM_H         = 14;
-const PLATFORM_W_MIN     = 100;
-const PLATFORM_W_MAX     = 200;
-const PLATFORM_SPACE_MIN = 120;
-const PLATFORM_SPACE_MAX = 180;
+const PLATFORM_H         = 16;
 const SAFETY_ZONE_PX     = 500;
+
+// ---- 足場生成パラメータ（高度依存） ----
+const PLATFORM_CONFIG = {
+  getWidth(height) {
+    if (height < 200) return Phaser.Math.Between(120, 200);
+    if (height < 500) return Phaser.Math.Between(80,  160);
+    if (height < 900) return Phaser.Math.Between(60,  120);
+    return Phaser.Math.Between(40, 100);
+  },
+  getGapY(height) {
+    if (height < 200) return Phaser.Math.Between(120, 160);
+    if (height < 500) return Phaser.Math.Between(150, 200);
+    if (height < 900) return Phaser.Math.Between(180, 240);
+    return Phaser.Math.Between(200, 280);
+  },
+  minDistance: 80,
+};
 
 // ---- 足場種別閾値 ----
 const MOVING_START_M  = 200;
@@ -63,7 +76,7 @@ const COLOR_VANISH  = 0xff9f43;
 
 // ---- チェックポイント ----
 const CP_INTERVAL_M = 100;   // 100mごとにCP
-const CP_PLATFORM_W = 300;   // CP足場の幅
+const CP_PLATFORM_W = 80;    // CP足場の幅（固定）
 const CP_POLE_H     = 40;    // 旗ポールの高さ
 const CP_FLAG_W     = 20;    // 旗の幅
 
@@ -76,7 +89,10 @@ export class GameScene extends Phaser.Scene {
   // preload
   // ------------------------------------------------------------------
   preload() {
-    this.load.image('marukoro', 'assets/images/marukoro.png');
+    this.load.image('marukoro',    'assets/images/marukoro.png');
+    this.load.image('platform_a',  'assets/images/platform_a.png');
+    this.load.image('platform_b',  'assets/images/platform_b.png');
+    this.load.image('platform_c',  'assets/images/platform_c.png');
   }
 
   // ------------------------------------------------------------------
@@ -118,8 +134,8 @@ export class GameScene extends Phaser.Scene {
     this._ball = this.physics.add.image(LAUNCH_X, LAUNCH_Y, 'marukoro');
     this._ball.setDisplaySize(32, 32);
     this._ball.setScale(32 / this._ball.width, 32 / this._ball.height);
-    this._ball.body.setSize(28, 28);
-    this._ball.body.setOffset(2, 2);
+    this._ball.body.setSize(28, 26);
+    this._ball.body.setOffset(2, 4);
     this._ball.setBounce(0.7);
     this._ball.setCollideWorldBounds(false);
     this._ball.setMaxVelocity(2000, 3000);
@@ -171,22 +187,15 @@ export class GameScene extends Phaser.Scene {
 
     // ---- CP足場 ----
     this._checkpointGroup = this.physics.add.staticGroup();
+    // CP判定はupdateループで手動チェック（staticボディのoverlap問題を回避）
+    // 上からのみ着地できるコライダー（下からはすり抜け）
     this.physics.add.collider(
       this._ball, this._checkpointGroup,
       (ball, cp) => {
         this._onLandPlatform(ball, cp);
-        // 上から着地 + 未通過のときだけ発動
-        if (!cp.reached && ball.body.bottom - cp.body.top <= 20) {
-          cp.reached = true;
-          cp.setTint(0xff8c00);  // 通過済み：濃いオレンジ
-          if (cp._flagGfx) this._drawFlag(cp._flagGfx, cp._flagX, cp.y - PLATFORM_H / 2, true);
-          this._checkpoints.lastReachedY      = cp.y - PLATFORM_H / 2 - RADIUS;
-          this._checkpoints.lastReachedHeight = cp.meters;
-          // デッドゾーンをCP高度に更新
-          this._deadZoneY = cp.y;
-          this._updateDeadZone(cp.y);
-          this._showCheckpointEffect(cp);
-          soundManager.playSe('se_checkpoint');
+        if (ball.body.bottom - cp.body.top > 16) {
+          // 下から当たった場合はすり抜け
+          ball.setVelocityY(Math.abs(ball.body.velocity.y));
         }
       },
     );
@@ -648,6 +657,9 @@ export class GameScene extends Phaser.Scene {
 
     if (!this._launched || this._gameOverFlag) return;
 
+    // CP通過チェック（毎フレーム手動判定）
+    this._checkCheckpoints();
+
     // 着地アニメーション中はダメージ・再発射判定をスキップ
     if (this._isLandingAnim) return;
 
@@ -699,9 +711,28 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  _checkCheckpoints() {
+    const ballBounds = this._ball.getBounds();
+    this._checkpointGroup.getChildren().forEach(cp => {
+      if (cp.reached) return;
+      const cpBounds = cp.getBounds();
+      if (Phaser.Geom.Intersects.RectangleToRectangle(ballBounds, cpBounds)) {
+        cp.reached = true;
+        cp.setTint(0xff8c00);
+        if (cp._flagGfx) this._drawFlag(cp._flagGfx, cp._flagX, cp.y - PLATFORM_H / 2, true);
+        this._checkpoints.lastReachedY      = cp.y - PLATFORM_H / 2 - RADIUS;
+        this._checkpoints.lastReachedHeight = cp.meters;
+        this._deadZoneY = cp.y;
+        this._updateDeadZone(cp.y);
+        this._showCheckpointEffect(cp);
+        soundManager.playSe('se_checkpoint');
+      }
+    });
+  }
+
   _spawnCheckpoint(y, meters) {
     const cx    = GAME_WIDTH / 2;
-    const flagX = cx - CP_PLATFORM_W / 2 + 16;  // 足場左端から少し内側
+    const flagX = cx - CP_PLATFORM_W / 2 + 8;  // 足場左端から少し内側
 
     // CP 近傍の通常足場を削除（重複防止）
     for (const group of [this._platformGroup, this._movingGroup, this._vanishGroup]) {
@@ -711,11 +742,12 @@ export class GameScene extends Phaser.Scene {
       });
     }
 
-    // CP足場（物理ボディ付き）
-    const cp = this._checkpointGroup.create(cx, y, 'wallPx')
-      .setDisplaySize(CP_PLATFORM_W, PLATFORM_H)
-      .setTint(0xffd700)
-      .refreshBody();
+    // CP足場（nineslice 固定80×16px）
+    const cp = this.add.nineslice(cx, y, 'platform_a', null, CP_PLATFORM_W, PLATFORM_H, 8, 8, 0, 0);
+    cp.setTint(0xffd700);
+    this.physics.add.existing(cp, true);
+    cp.body.setSize(CP_PLATFORM_W, PLATFORM_H);
+    this._checkpointGroup.add(cp);
     cp.reached = false;
     cp.meters  = meters;
     cp._flagX  = flagX;
@@ -1313,6 +1345,8 @@ export class GameScene extends Phaser.Scene {
       this.cameras.main.setScroll(0, scrollY);
     } else {
       this.cameras.main.setScroll(0, 0);
+      this._ball.body.reset(LAUNCH_X, LAUNCH_Y);
+      this._ball.body.allowGravity = false;
       this._clearAllPlatforms();
       this._clearCheckpoints();
       this._nextPlatformY = LAUNCH_Y - SAFETY_ZONE_PX;
@@ -1373,7 +1407,8 @@ export class GameScene extends Phaser.Scene {
     const targetY = this.cameras.main.scrollY - 400;
     while (this._nextPlatformY > targetY) {
       this._spawnPlatformAt(this._nextPlatformY);
-      this._nextPlatformY -= Phaser.Math.Between(PLATFORM_SPACE_MIN, PLATFORM_SPACE_MAX);
+      const meters = Math.floor((LAUNCH_Y - this._nextPlatformY) / COURSE.pxPerMeter);
+      this._nextPlatformY -= PLATFORM_CONFIG.getGapY(meters);
     }
 
     // CP 送還後などで足場が不足している区間を補填
@@ -1397,7 +1432,8 @@ export class GameScene extends Phaser.Scene {
       let fillY = bottomY - 200;
       while (fillY > topY) {
         this._spawnPlatformAt(fillY);
-        fillY -= Phaser.Math.Between(PLATFORM_SPACE_MIN, PLATFORM_SPACE_MAX);
+        const fm = Math.floor((LAUNCH_Y - fillY) / COURSE.pxPerMeter);
+        fillY -= PLATFORM_CONFIG.getGapY(fm);
       }
     }
   }
@@ -1406,19 +1442,44 @@ export class GameScene extends Phaser.Scene {
     // CP 付近は生成しない
     if (this._isTooCloseToCheckpoint(y)) return;
 
-    const meters = Math.floor((LAUNCH_Y - y) / COURSE.pxPerMeter);
-    const w = Phaser.Math.Between(PLATFORM_W_MIN, PLATFORM_W_MAX);
-    const minX = WALL_W + w / 2 + 4;
-    const maxX = GAME_WIDTH - WALL_W - w / 2 - 4;
-    const x = Phaser.Math.Between(minX, maxX);
+    const meters   = Math.floor((LAUNCH_Y - y) / COURSE.pxPerMeter);
+    const w        = PLATFORM_CONFIG.getWidth(meters);
+    const minX     = WALL_W + w / 2 + 4;
+    const maxX     = GAME_WIDTH - WALL_W - w / 2 - 4;
+    const x        = Phaser.Math.Between(minX, maxX);
+    const imageKey = this._getPlatformImageKey(getZoneByHeight(meters).id);
+
+    if (this._isOverlapping(x, y)) return;
 
     if (meters >= VANISH_START_M && Math.random() < 0.3) {
       this._spawnVanishPlatform(x, y, w);
     } else if (meters >= MOVING_START_M && Math.random() < 0.3) {
       this._spawnMovingPlatform(x, y, w);
     } else {
-      this._spawnNormalPlatform(x, y, w, getZoneByHeight(meters).platformColor);
+      this._spawnNormalPlatform(x, y, w, imageKey);
     }
+  }
+
+  _getPlatformImageKey(zoneId) {
+    if (['surface','troposphere','stratosphere','mesosphere','thermosphere','exosphere'].includes(zoneId)) {
+      return 'platform_a';
+    }
+    if (['space','deepspace','gate'].includes(zoneId)) {
+      return 'platform_b';
+    }
+    return 'platform_c'; // 地獄ゾーン
+  }
+
+  _isOverlapping(x, y) {
+    const all = [
+      ...this._platformGroup.getChildren(),
+      ...this._movingGroup.getChildren(),
+      ...this._vanishGroup.getChildren(),
+    ];
+    return all.some(p =>
+      Math.abs(p.x - x) < PLATFORM_CONFIG.minDistance &&
+      Math.abs(p.y - y) < 40,
+    );
   }
 
   _isTooCloseToCheckpoint(y) {
@@ -1437,20 +1498,23 @@ export class GameScene extends Phaser.Scene {
     ) ?? null;
   }
 
-  _spawnNormalPlatform(x, y, w, color = 0x7bc67e) {
-    this._platformGroup.create(x, y, 'wallPx')
-      .setDisplaySize(w, PLATFORM_H)
-      .setTint(color)
-      .refreshBody();
+  _spawnNormalPlatform(x, y, w, imageKey = 'platform_a') {
+    const plat = this.add.nineslice(x, y, imageKey, null, w, PLATFORM_H, 8, 8, 0, 0);
+    this.physics.add.existing(plat, true);
+    plat.body.setSize(w, PLATFORM_H);
+    this._platformGroup.add(plat);
   }
 
   _spawnMovingPlatform(x, y, w) {
-    const plat = this._movingGroup.create(x, y, 'wallPx')
-      .setDisplaySize(w, PLATFORM_H)
-      .setTint(COLOR_MOVING)
-      .refreshBody();
+    const meters   = Math.floor((LAUNCH_Y - y) / COURSE.pxPerMeter);
+    const imageKey = this._getPlatformImageKey(getZoneByHeight(meters).id);
 
-    plat.prevX = x;  // 追従用：前フレームのX
+    const plat = this.add.nineslice(x, y, imageKey, null, w, PLATFORM_H, 8, 8, 0, 0);
+    plat.setTint(COLOR_MOVING);
+    this.physics.add.existing(plat, true);
+    plat.body.setSize(w, PLATFORM_H);
+    this._movingGroup.add(plat);
+    plat.prevX = x;
 
     const minX  = WALL_W + w / 2 + 4;
     const maxX  = GAME_WIDTH - WALL_W - w / 2 - 4;
@@ -1463,15 +1527,19 @@ export class GameScene extends Phaser.Scene {
       yoyo:     true,
       repeat:   -1,
       ease:     'Sine.InOut',
-      onUpdate: () => { if (plat?.active) plat.refreshBody(); },
+      onUpdate: () => { if (plat?.active) plat.body.reset(plat.x, plat.y); },
     });
   }
 
   _spawnVanishPlatform(x, y, w) {
-    const plat = this._vanishGroup.create(x, y, 'wallPx')
-      .setDisplaySize(w, PLATFORM_H)
-      .setTint(COLOR_VANISH)
-      .refreshBody();
+    const meters   = Math.floor((LAUNCH_Y - y) / COURSE.pxPerMeter);
+    const imageKey = this._getPlatformImageKey(getZoneByHeight(meters).id);
+
+    const plat = this.add.nineslice(x, y, imageKey, null, w, PLATFORM_H, 8, 8, 0, 0);
+    plat.setTint(COLOR_VANISH);
+    this.physics.add.existing(plat, true);
+    plat.body.setSize(w, PLATFORM_H);
+    this._vanishGroup.add(plat);
     plat.vanishStarted = false;
   }
 
@@ -1612,13 +1680,11 @@ export class GameScene extends Phaser.Scene {
     const px = LAUNCH_X;
     const py = LAUNCH_Y;
 
+    // 発射台本体（LAUNCH_Y + 14 = 床上面に乗せる）
     g.fillStyle(COLORS.LAUNCH_PAD, 1);
-    g.fillRect(px - 52, py, 104, 14);
+    g.fillRect(px - 52, py + 14, 104, 14);
     g.lineStyle(3, 0xbb0000, 1);
-    g.strokeRect(px - 52, py, 104, 14);
-    g.fillStyle(0x888888, 1);
-    g.fillRect(px - 46, py + 14, 10, 20);
-    g.fillRect(px + 36, py + 14, 10, 20);
+    g.strokeRect(px - 52, py + 14, 104, 14);
 
     this.add.text(px, py - 4, '↑ LAUNCH', {
       fontFamily: "'Press Start 2P'",

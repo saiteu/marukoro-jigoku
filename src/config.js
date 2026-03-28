@@ -52,7 +52,7 @@ export const LAUNCH = {
   powerMax:        2000, // MAX時の初速（px/s）
   powerChargeTime: 1.5,  // 0→100%にかかる時間（秒）
   launchPadX:      GAME_WIDTH / 2,
-  launchPadY:      GAME_HEIGHT - 60,
+  launchPadY:      GAME_HEIGHT - 28,
 };
 
 // ---- コース生成パラメータ ----
