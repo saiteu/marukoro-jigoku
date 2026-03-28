@@ -92,6 +92,13 @@ export class GameScene extends Phaser.Scene {
   }
 
   // ------------------------------------------------------------------
+  // preload
+  // ------------------------------------------------------------------
+  preload() {
+    this.load.image('marukoro', 'assets/images/marukoro.png');
+  }
+
+  // ------------------------------------------------------------------
   // create
   // ------------------------------------------------------------------
   create() {
@@ -127,7 +134,11 @@ export class GameScene extends Phaser.Scene {
     this._drawLaunchPad();
 
     // ---- まるころ（Arcade Physics Image） ----
-    this._ball = this.physics.add.image(LAUNCH_X, LAUNCH_Y, 'ballTex');
+    this._ball = this.physics.add.image(LAUNCH_X, LAUNCH_Y, 'marukoro');
+    this._ball.setDisplaySize(32, 32);
+    this._ball.setScale(32 / this._ball.width, 32 / this._ball.height);
+    this._ball.body.setSize(28, 28);
+    this._ball.body.setOffset(2, 2);
     this._ball.setBounce(0.7);
     this._ball.setCollideWorldBounds(false);
     this._ball.setMaxVelocity(2000, 3000);
@@ -300,6 +311,8 @@ export class GameScene extends Phaser.Scene {
     this._chargeStart    = 0;       // チャージ開始時刻
     this._relaunchFlag   = false;
     this._isRelaunch     = false;
+    this._isLandingAnim  = false;
+    this._hasLanded      = false;
     this._relaunchPos    = null;
     this._maxMeters      = 0;
     this._maxHeight      = 0;
@@ -346,15 +359,6 @@ export class GameScene extends Phaser.Scene {
   // テクスチャ動的生成
   // ------------------------------------------------------------------
   _createTextures() {
-    if (!this.textures.exists('ballTex')) {
-      const g = this.make.graphics({ add: false });
-      g.fillStyle(COLORS.PLAYER, 1);
-      g.fillCircle(RADIUS, RADIUS, RADIUS);
-      g.lineStyle(2, COLORS.PLAYER_OUTLINE, 1);
-      g.strokeCircle(RADIUS, RADIUS, RADIUS);
-      g.generateTexture('ballTex', RADIUS * 2, RADIUS * 2);
-      g.destroy();
-    }
     if (!this.textures.exists('wallPx')) {
       const g = this.make.graphics({ add: false });
       g.fillStyle(0xffffff, 1);
@@ -374,9 +378,11 @@ export class GameScene extends Phaser.Scene {
     } else {
       const vy = Math.abs(ball.body.velocity.y);
       ball.setBounce(vy < 200 ? 0.1 : 0.6);
-      if (vy < 400 && this._landSeCooldown <= 0) {
+      if (vy < 400 && !this._hasLanded && this._landSeCooldown <= 0) {
+        this._hasLanded = true;
         soundManager.playSe('se_land');
         this._landSeCooldown = 500;
+        this._playLandAnimation();
       }
     }
   }
@@ -495,20 +501,32 @@ export class GameScene extends Phaser.Scene {
     const vx  =  Math.cos(rad) * this._aimPower;
     const vy  = -Math.sin(rad) * this._aimPower;
 
-    this._ball.body.allowGravity = true;
-    this._ball.setVelocity(vx, vy);
-    this._trail.start();
-    this._trajectoryGfx.clear();
-    this._hintText.setVisible(false);
+    // 発射前に縦に伸びる → onComplete で実際の発射処理
+    this.tweens.killTweensOf(this._ball);
+    this.tweens.add({
+      targets:  this._ball,
+      scaleX:   0.7,
+      scaleY:   1.3,
+      duration: 100,
+      ease:     'Power2.easeOut',
+      onComplete: () => {
+        this._ball.setScale(1.0);
+        this._ball.body.allowGravity = true;
+        this._ball.setVelocity(vx, vy);
+        this._trail.start();
+        this._trajectoryGfx.clear();
+        this._hintText.setVisible(false);
 
-    this._state        = 'flying';
-    this._launched     = true;
-    this._gameOverFlag = false;
-    this._isRelaunch   = false;
-    this._launchTime   = this.time.now;
-    this._aimPower     = 400;
+        this._state        = 'flying';
+        this._launched     = true;
+        this._gameOverFlag = false;
+        this._isRelaunch   = false;
+        this._launchTime   = this.time.now;
+        this._aimPower     = 400;
 
-    soundManager.playSe('se_launch');
+        soundManager.playSe('se_launch');
+      },
+    });
   }
 
   _drawTrajectory() {
@@ -578,6 +596,7 @@ export class GameScene extends Phaser.Scene {
     if (vy > 800) this._ball.setVelocityY(800);
 
     if (!this._pastApex && vy > 0) this._pastApex = true;
+
 
     // デバッグ用：発射台より上にいる間は安全位置を記録
     if (this._debug && by < LAUNCH_Y - 10) {
@@ -650,6 +669,9 @@ export class GameScene extends Phaser.Scene {
     }
 
     if (!this._launched || this._gameOverFlag) return;
+
+    // 着地アニメーション中はダメージ・再発射判定をスキップ
+    if (this._isLandingAnim) return;
 
     // 発射直後1秒間はゲームオーバー判定をスキップ
     if (this.time.now - this._launchTime < 1000) return;
@@ -863,6 +885,33 @@ export class GameScene extends Phaser.Scene {
   }
 
   // ------------------------------------------------------------------
+  // 着地スライムアニメーション
+  // ------------------------------------------------------------------
+  _playLandAnimation() {
+    this._isLandingAnim = true;
+    this.tweens.killTweensOf(this._ball);
+    this.tweens.add({
+      targets: this._ball, scaleX: 1.6, scaleY: 0.5, duration: 80, ease: 'Power2.easeOut',
+      onComplete: () => {
+        this.tweens.add({
+          targets: this._ball, scaleX: 0.7, scaleY: 1.4, duration: 100, ease: 'Power2.easeOut',
+          onComplete: () => {
+            this.tweens.add({
+              targets: this._ball, scaleX: 1.2, scaleY: 0.9, duration: 80, ease: 'Power2.easeOut',
+              onComplete: () => {
+                this.tweens.add({
+                  targets: this._ball, scaleX: 1.0, scaleY: 1.0, duration: 100, ease: 'Elastic.easeOut',
+                  onComplete: () => { this._isLandingAnim = false; },
+                });
+              },
+            });
+          },
+        });
+      },
+    });
+  }
+
+  // ------------------------------------------------------------------
   // ライフ減少演出
   // ------------------------------------------------------------------
   _playLoseLifeEffect() {
@@ -906,6 +955,17 @@ export class GameScene extends Phaser.Scene {
   _onEnterDeadZone() {
     if (this._returningFlag) return;
     this._returningFlag = true;
+
+    // ぷるぷる震え
+    this.tweens.killTweensOf(this._ball);
+    this.tweens.add({
+      targets:  this._ball,
+      x:        this._ball.x + 5,
+      duration: 50,
+      yoyo:     true,
+      repeat:   4,
+      ease:     'Power1',
+    });
 
     // ライフ減少
     this._lives = Math.max(0, this._lives - 1);
@@ -1253,11 +1313,13 @@ export class GameScene extends Phaser.Scene {
   }
 
   _showLaunchUI() {
-    this._state      = 'aiming';
-    this._pastApex   = false;
-    this._restTimer  = 0;
-    this._stuckTimer = 0;
-    this._lastStuckY = 0;
+    this._state         = 'aiming';
+    this._pastApex      = false;
+    this._restTimer     = 0;
+    this._stuckTimer    = 0;
+    this._lastStuckY    = 0;
+    this._hasLanded     = false;
+    this._isLandingAnim = false;
     this._ball.setBounce(0.7);
 
     // 射出状態リセット
