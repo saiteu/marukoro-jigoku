@@ -17,6 +17,7 @@ import {
 import { TrailEffect } from '../objects/TrailEffect.js';
 import { soundManager } from '../systems/SoundManager.js';
 import { i18n } from '../i18n/index.js';
+import { HELL_ZONES, getZoneByHeight } from '../config/hellZones.js';
 
 // URLパラメータ ?debug=true でデバッグモード有効
 const DEBUG_MODE = new URLSearchParams(window.location.search).get('debug') === 'true';
@@ -59,26 +60,6 @@ const VANISH_WARN     = 2000;
 const COLOR_MOVING  = 0x74b9ff;
 const COLOR_VANISH  = 0xff9f43;
 
-// ---- 背景グラデーション ----
-const BG_COLORS = [
-  { height:    0, color: 0xe8f4f8, name: '地上' },
-  { height:  100, color: 0xc8e6c9, name: '草原' },
-  { height:  200, color: 0xb3d9f7, name: '空' },
-  { height:  350, color: 0x9b59b6, name: '高層' },
-  { height:  500, color: 0x6b2d8b, name: '宇宙の入口' },
-  { height:  700, color: 0x2d1b4e, name: '暗黒' },
-  { height:  900, color: 0x8b0000, name: '地獄の入口' },
-  { height: 1000, color: 0x1a0000, name: '地獄' },
-];
-
-function getPlatformColor(meters) {
-  if (meters < 100) return 0x7bc67e;
-  if (meters < 200) return 0x5bafd6;
-  if (meters < 350) return 0x9b59b6;
-  if (meters < 500) return 0xe67e22;
-  if (meters < 700) return 0xe74c3c;
-  return 0x555555;
-}
 
 // ---- チェックポイント ----
 const CP_INTERVAL_M = 100;   // 100mごとにCP
@@ -112,7 +93,7 @@ export class GameScene extends Phaser.Scene {
     this._bgRect = this.add.rectangle(
       GAME_WIDTH / 2, GAME_HEIGHT / 2,
       GAME_WIDTH, GAME_HEIGHT,
-      BG_COLORS[0].color,
+      HELL_ZONES[0].bgColor,
     ).setDepth(0).setScrollFactor(0);
 
     // ---- 壁（静的ボディ） ----
@@ -316,7 +297,7 @@ export class GameScene extends Phaser.Scene {
     this._relaunchPos    = null;
     this._maxMeters      = 0;
     this._maxHeight      = 0;
-    this._currentBgIndex = 0;
+    this._currentZoneId  = HELL_ZONES[0].id;
     this._pastApex       = false;
     this._restTimer      = 0;
     this._stuckTimer     = 0;
@@ -617,15 +598,12 @@ export class GameScene extends Phaser.Scene {
       this._maxMeters = Math.floor(this._maxHeight / COURSE.pxPerMeter);
 
       // 背景ゾーン判定
-      let targetIdx = 0;
-      for (let i = 0; i < BG_COLORS.length; i++) {
-        if (this._maxMeters >= BG_COLORS[i].height) targetIdx = i;
-      }
-      if (targetIdx !== this._currentBgIndex) {
-        this._currentBgIndex = targetIdx;
+      const newZone = getZoneByHeight(this._maxMeters);
+      if (newZone.id !== this._currentZoneId) {
+        this._currentZoneId = newZone.id;
         this.tweens.killTweensOf(this._bgRect);
         const fromColor = Phaser.Display.Color.IntegerToColor(this._bgRect.fillColor);
-        const toColor   = Phaser.Display.Color.IntegerToColor(BG_COLORS[targetIdx].color);
+        const toColor   = Phaser.Display.Color.IntegerToColor(newZone.bgColor);
         this.tweens.addCounter({
           from:     0,
           to:       1,
@@ -639,7 +617,7 @@ export class GameScene extends Phaser.Scene {
             this._bgRect.setFillStyle(Phaser.Display.Color.GetColor(r, g, b));
           },
         });
-        this._showZoneName(BG_COLORS[targetIdx].name);
+        this._showZoneName(newZone.name[i18n.lang] ?? newZone.name.ja);
       }
     }
     if (!this._meterText.visible) this._meterText.setVisible(true);
@@ -1439,7 +1417,7 @@ export class GameScene extends Phaser.Scene {
     } else if (meters >= MOVING_START_M && Math.random() < 0.3) {
       this._spawnMovingPlatform(x, y, w);
     } else {
-      this._spawnNormalPlatform(x, y, w, getPlatformColor(meters));
+      this._spawnNormalPlatform(x, y, w, getZoneByHeight(meters).platformColor);
     }
   }
 
