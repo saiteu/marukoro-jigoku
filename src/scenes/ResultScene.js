@@ -19,7 +19,7 @@ export class ResultScene extends Phaser.Scene {
     const W = this.scale.width;
     const H = this.scale.height;
 
-    soundManager.playBgm('bgm_result');
+    soundManager.playBgm('bgm_result', false);
 
     const isNew     = saveManager.submitScore(this._meters);
     const titleData = i18n.getTitle(this._meters);

@@ -197,17 +197,39 @@ export class GameScene extends Phaser.Scene {
         stroke: '#000', strokeThickness: 2 },
     ).setOrigin(0.5, 1).setDepth(21).setScrollFactor(0).setVisible(false);
 
-    // ---- UI ----
-    this._meterText = this.add.text(12, 12, '', {
+    // ---- HUD ----
+    // 背景帯
+    this.add.rectangle(GAME_WIDTH / 2, 0, GAME_WIDTH, 44, 0x000000, 0.4)
+      .setOrigin(0.5, 0).setScrollFactor(0).setDepth(99);
+
+    // 高度（上部中央）
+    this._meterText = this.add.text(GAME_WIDTH / 2, 8, '', {
       fontFamily: "'Press Start 2P'",
-      fontSize: '14px',
+      fontSize: '12px',
       color: CSS_COLORS.YELLOW,
       stroke: '#000', strokeThickness: 3,
-    }).setDepth(30).setScrollFactor(0).setVisible(false);
+    }).setOrigin(0.5, 0).setDepth(100).setScrollFactor(0).setVisible(false);
 
-    const soundBtn = this.add.text(GAME_WIDTH - 14, 14, '🔊', {
-      fontSize: '18px',
-    }).setOrigin(1, 0).setDepth(30).setScrollFactor(0)
+    // 最高記録（上部右）
+    this._bestText = this.add.text(GAME_WIDTH - 12, 8, '🏆 0m', {
+      fontFamily: "'Press Start 2P'",
+      fontSize:   '7px',
+      color:      '#aaaaaa',
+      stroke:     '#000', strokeThickness: 2,
+    }).setOrigin(1, 0).setDepth(100).setScrollFactor(0);
+
+    // ゾーン名（中央下段）
+    this._zoneText = this.add.text(GAME_WIDTH / 2, 26, '', {
+      fontFamily: "'Press Start 2P'",
+      fontSize:   '7px',
+      color:      '#ffffff',
+      stroke:     '#000', strokeThickness: 2,
+    }).setOrigin(0.5, 0).setDepth(100).setScrollFactor(0);
+
+    // 音量ボタン（右端 HUD下）
+    const soundBtn = this.add.text(GAME_WIDTH - 10, 48, '🔊', {
+      fontSize: '16px',
+    }).setOrigin(1, 0).setDepth(100).setScrollFactor(0)
       .setInteractive({ useHandCursor: true });
     soundBtn.on('pointerdown', () => {
       const en = !soundManager.isEnabled();
@@ -485,7 +507,7 @@ export class GameScene extends Phaser.Scene {
         this._ball.setVelocity(vx, vy);
         this._trail.start();
         this._trajectoryGfx.clear();
-        this._hintText.setVisible(false);
+        this._destroyLaunchPanel();
 
         this._state        = 'flying';
         this._launched     = true;
@@ -522,17 +544,59 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
-    // パワーゲージ（ボール右横）
+    this._updateLaunchPanel();
+  }
+
+  // ------------------------------------------------------------------
+  // 発射パネル（画面下部固定）
+  // ------------------------------------------------------------------
+  _createLaunchPanel() {
+    this._launchPanelObjs = [];
+    const px = GAME_WIDTH / 2;
+
+    const bg = this.add.rectangle(px, GAME_HEIGHT, GAME_WIDTH, 50, 0x000000, 0.7)
+      .setOrigin(0.5, 1).setScrollFactor(0).setDepth(100);
+    this._launchPanelObjs.push(bg);
+
+    // 角度テキスト（左寄り）
+    this._aimAngleText = this.add.text(px - 90, GAME_HEIGHT - 38, '90°', {
+      fontFamily: "'Press Start 2P'", fontSize: '9px',
+      color: '#ffffff', stroke: '#000', strokeThickness: 2,
+    }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(101);
+    this._launchPanelObjs.push(this._aimAngleText);
+
+    // POWER ラベル
+    const powerLabel = this.add.text(px - 18, GAME_HEIGHT - 38, 'POWER', {
+      fontFamily: "'Press Start 2P'", fontSize: '7px',
+      color: '#ffffff', stroke: '#000', strokeThickness: 2,
+    }).setOrigin(1, 0).setScrollFactor(0).setDepth(101);
+    this._launchPanelObjs.push(powerLabel);
+
+    // バー背景（center at px+40, width=120）
+    const barBg = this.add.rectangle(px + 40, GAME_HEIGHT - 20, 120, 12, 0x333333)
+      .setScrollFactor(0).setDepth(101);
+    this._launchPanelObjs.push(barBg);
+
+    // バー本体（left-anchor at px-20）
+    this._powerBar = this.add.rectangle(px - 20, GAME_HEIGHT - 20, 0, 10, 0x00ff00)
+      .setOrigin(0, 0.5).setScrollFactor(0).setDepth(102);
+    this._launchPanelObjs.push(this._powerBar);
+  }
+
+  _destroyLaunchPanel() {
+    (this._launchPanelObjs ?? []).forEach(o => o?.destroy());
+    this._launchPanelObjs = [];
+    this._powerBar        = null;
+    this._aimAngleText    = null;
+  }
+
+  _updateLaunchPanel() {
+    if (!this._powerBar) return;
     const ratio = (this._aimPower - 400) / (2000 - 400);
-    const barH  = 60;
-    const barW  = 8;
-    const bx    = ox + 25;
-    const by    = oy - barH / 2;
-    this._trajectoryGfx.fillStyle(0x222222, 0.8);
-    this._trajectoryGfx.fillRect(bx, by, barW, barH);
-    const fc = ratio < 0.5 ? 0x00ff00 : ratio < 0.8 ? 0xffff00 : 0xff0000;
-    this._trajectoryGfx.fillStyle(fc, 1);
-    this._trajectoryGfx.fillRect(bx, by + barH * (1 - ratio), barW, barH * ratio);
+    this._powerBar.width = 120 * ratio;
+    const color = ratio < 0.5 ? 0x00ff00 : ratio < 0.8 ? 0xffff00 : 0xff0000;
+    this._powerBar.setFillStyle(color);
+    if (this._aimAngleText) this._aimAngleText.setText(`${Math.round(this._aimAngle)}°`);
   }
 
   _updateAimAngle(pointer) {
@@ -611,6 +675,7 @@ export class GameScene extends Phaser.Scene {
     }
     if (!this._meterText.visible) this._meterText.setVisible(true);
     this._meterText.setText(`↑ ${this._maxMeters}m`);
+    if (this._bestText) this._bestText.setText(`🏆 ${this._maxMeters}m`);
 
     // 着地静止
     const onGroundNow   = this._ball.body.blocked.down;
@@ -649,7 +714,8 @@ export class GameScene extends Phaser.Scene {
     const vx         = this._ball.body.velocity.x;
     const totalSpeed = Math.sqrt(vx * vx + vy * vy);
     const onGround   = this._ball.body.blocked.down;
-    const fellBelow  = by > this._deadZoneY + 50;
+    const fellBelow      = by > this._deadZoneY + 50;
+    const belowDeadZone  = by > this._deadZoneY;
 
     if (totalSpeed < 30) {
       this._restTimer += dt;
@@ -658,20 +724,25 @@ export class GameScene extends Phaser.Scene {
     }
     const trulyStopped = this._restTimer >= 0.3;
 
-    // 優先1：発射台より下 → 落下判定
+    // 優先1：デッドゾーンより50px以上下 → 落下判定
     if (fellBelow) {
       this._gameOverFlag = true;
       this._onFallDetected();
       return;
     }
-    // 優先2：足場の上で静止 → 再発射
-    if (trulyStopped && onGround && !fellBelow) {
+    // 優先2：足場の上で静止
+    if (trulyStopped && onGround) {
       this._gameOverFlag = true;
-      this._triggerRelaunch();
+      // デッドゾーン以下の足場に着地 → ミス
+      if (belowDeadZone) {
+        this._onFallDetected();
+      } else {
+        this._triggerRelaunch();
+      }
       return;
     }
     // 優先3：空中で静止 → 落下判定
-    if (trulyStopped && !onGround && !fellBelow) {
+    if (trulyStopped && !onGround) {
       this._gameOverFlag = true;
       this._onFallDetected();
       return;
@@ -686,21 +757,21 @@ export class GameScene extends Phaser.Scene {
     for (let h = CP_INTERVAL_M; h <= 2000; h += CP_INTERVAL_M) {
       const y = LAUNCH_Y - h * COURSE.pxPerMeter;
 
-      // 点線グラフィック
+      // 点線グラフィック（控えめな白）
       const gfx = this.add.graphics().setDepth(5);
-      gfx.lineStyle(1, 0xFFD700, 0.5);
-      for (let x = 0; x < GAME_WIDTH; x += 20) {
-        gfx.lineBetween(x, y, x + 10, y);
+      gfx.lineStyle(1, 0xffffff, 0.3);
+      for (let x = 0; x < GAME_WIDTH; x += 24) {
+        gfx.lineBetween(x, y, x + 16, y);
       }
 
       // 高度アイコン（ワールド座標）
-      const icon = this.add.text(8, y - 8, `📍${h}m`, {
+      const icon = this.add.text(8, y - 8, `⬆${h}m`, {
         fontFamily: "'Press Start 2P'",
         fontSize:   '6px',
-        color:      '#FFD700',
+        color:      '#ffffff',
         stroke:     '#000000',
         strokeThickness: 2,
-      }).setDepth(6);
+      }).setAlpha(0.6).setDepth(6);
 
       this._cpLines.push({ height: h, y, reached: false, gfx, icon });
     }
@@ -726,11 +797,11 @@ export class GameScene extends Phaser.Scene {
       if (by > cp.y) return;   // まだラインに届いていない
 
       cp.reached = true;
-      // ラインを明るく
+      // 通過後：ゴールド色で明るく
       cp.gfx.clear();
-      cp.gfx.lineStyle(2, 0xFFD700, 0.9);
-      for (let x = 0; x < GAME_WIDTH; x += 20) {
-        cp.gfx.lineBetween(x, cp.y, x + 10, cp.y);
+      cp.gfx.lineStyle(2, 0xFFD700, 0.8);
+      for (let x = 0; x < GAME_WIDTH; x += 24) {
+        cp.gfx.lineBetween(x, cp.y, x + 16, cp.y);
       }
 
       this._lastCpHeight = cp.height;
@@ -795,12 +866,12 @@ export class GameScene extends Phaser.Scene {
   }
 
   _createLivesUI() {
-    this._livesText = this.add.text(16, 50, this._getLivesString(), {
-      fontSize:        '20px',
+    this._livesText = this.add.text(12, 8, this._getLivesString(), {
+      fontSize:        '14px',
       color:           '#ff4444',
       stroke:          '#000000',
       strokeThickness: 3,
-    }).setScrollFactor(0).setDepth(100);
+    }).setOrigin(0, 0).setScrollFactor(0).setDepth(100);
   }
 
   // ------------------------------------------------------------------
@@ -1034,21 +1105,13 @@ export class GameScene extends Phaser.Scene {
   // ゾーン名表示
   // ------------------------------------------------------------------
   _showZoneName(name) {
-    const t = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT * 0.68, name, {
-      fontFamily: "'Press Start 2P'",
-      fontSize:   '14px',
-      color:      '#ffffff',
-      stroke:     '#000000',
-      strokeThickness: 4,
-    }).setOrigin(0.5).setScrollFactor(0).setDepth(35).setAlpha(0);
-
+    if (!this._zoneText) return;
+    this._zoneText.setText(name).setAlpha(0);
+    this.tweens.killTweensOf(this._zoneText);
     this.tweens.add({
-      targets:  t,
-      alpha:    { from: 0, to: 1 },
-      duration: 500,
-      yoyo:     true,
-      hold:     1000,
-      onComplete: () => t.destroy(),
+      targets: this._zoneText, alpha: { from: 0, to: 1 },
+      duration: 400, yoyo: true, hold: 2000,
+      onComplete: () => { if (this._zoneText) this._zoneText.setText('').setAlpha(1); },
     });
   }
 
@@ -1248,13 +1311,16 @@ export class GameScene extends Phaser.Scene {
     this._isKeyCharging = false;
     this._aimAngle      = 90;
     this._aimPower      = 400;
-    this._hintText.setVisible(true);
+    this._hintText.setVisible(false);
+    this._destroyLaunchPanel();
+    this._createLaunchPanel();
 
     if (this._isRelaunch && this._relaunchPos) {
       const scrollY = this._relaunchPos.y - GAME_HEIGHT * 0.55;
       this.cameras.main.setScroll(0, scrollY);
     } else {
-      this.cameras.main.setScroll(0, 0);
+      // パネル(50px)と重ならないよう少し下スクロール
+      this.cameras.main.setScroll(0, 55);
       this._ball.body.reset(LAUNCH_X, LAUNCH_Y);
       this._ball.body.allowGravity = false;
       this._clearAllPlatforms();
@@ -1557,9 +1623,9 @@ export class GameScene extends Phaser.Scene {
 
     nearest.reached    = true;
     nearest.gfx.clear();
-    nearest.gfx.lineStyle(2, 0xFFD700, 0.9);
-    for (let x = 0; x < GAME_WIDTH; x += 20) {
-      nearest.gfx.lineBetween(x, nearest.y, x + 10, nearest.y);
+    nearest.gfx.lineStyle(2, 0xFFD700, 0.8);
+    for (let x = 0; x < GAME_WIDTH; x += 24) {
+      nearest.gfx.lineBetween(x, nearest.y, x + 16, nearest.y);
     }
     this._lastCpHeight = nearest.height;
     this._lastCpY      = nearest.y;

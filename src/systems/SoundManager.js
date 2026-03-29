@@ -50,9 +50,9 @@ export class SoundManager {
   isEnabled() { return this._enabled; }
 
   // ------------------------------------------------------------------
-  // BGM 再生（ループ）
+  // BGM 再生（loop=trueでループ、falseで1回再生）
   // ------------------------------------------------------------------
-  async playBgm(key) {
+  async playBgm(key, loop = true) {
     if (!this._unlocked) return;
     if (this._currentBgm === key) return;
     this.stopBgm();
@@ -64,12 +64,12 @@ export class SoundManager {
     for (const ext of ['.ogg', '.mp3']) {
       const buffer = await this._loadAudioFile(`/assets/sounds/${key}${ext}`);
       if (buffer) {
-        this._playBuffer(buffer, true, this._bgmGain);
+        this._playBuffer(buffer, loop, this._bgmGain);
         return;
       }
     }
     // ファイルなし → 生成音
-    this._playGeneratedBgm(key);
+    this._playGeneratedBgm(key, loop);
   }
 
   stopBgm() {
@@ -130,7 +130,7 @@ export class SoundManager {
   // ------------------------------------------------------------------
   // Web Audio API フォールバック音源生成
   // ------------------------------------------------------------------
-  _playGeneratedBgm(key) {
+  _playGeneratedBgm(key, loop = true) {
     if (!this._ctx) return;
     const melodies = {
       bgm_title: [
@@ -154,16 +154,18 @@ export class SoundManager {
     };
     const melody = melodies[key] || melodies.bgm_game;
     const totalDuration = melody.reduce((s, [, d]) => s + d, 0);
-    const loop = () => {
+    const play = () => {
       if (this._currentBgm !== key) return;
       let t = this._ctx.currentTime;
       for (const [freq, dur] of melody) {
         if (freq > 0) this._beep(freq, dur * 0.85, t, this._bgmGain, 'square', 0.08);
         t += dur;
       }
-      this._bgmLoopId = setTimeout(loop, totalDuration * 1000 - 50);
+      if (loop) {
+        this._bgmLoopId = setTimeout(play, totalDuration * 1000 - 50);
+      }
     };
-    loop();
+    play();
   }
 
   _playGeneratedSe(key) {
