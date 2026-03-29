@@ -75,10 +75,7 @@ const COLOR_VANISH  = 0xff9f43;
 
 
 // ---- チェックポイント ----
-const CP_INTERVAL_M = 100;   // 100mごとにCP
-const CP_PLATFORM_W = 80;    // CP足場の幅（固定）
-const CP_POLE_H     = 40;    // 旗ポールの高さ
-const CP_FLAG_W     = 20;    // 旗の幅
+const CP_INTERVAL_M = 100;   // 100mごとにCPライン
 
 export class GameScene extends Phaser.Scene {
   constructor() {
@@ -185,20 +182,8 @@ export class GameScene extends Phaser.Scene {
       },
     );
 
-    // ---- CP足場 ----
-    this._checkpointGroup = this.physics.add.staticGroup();
-    // CP判定はupdateループで手動チェック（staticボディのoverlap問題を回避）
-    // 上からのみ着地できるコライダー（下からはすり抜け）
-    this.physics.add.collider(
-      this._ball, this._checkpointGroup,
-      (ball, cp) => {
-        this._onLandPlatform(ball, cp);
-        if (ball.body.bottom - cp.body.top > 16) {
-          // 下から当たった場合はすり抜け
-          ball.setVelocityY(Math.abs(ball.body.velocity.y));
-        }
-      },
-    );
+    // ---- CPライン（physics不要・高度監視で判定）----
+    this._cpLines = [];
 
     // ---- エフェクト ----
     this._trail = new TrailEffect(this);
@@ -314,12 +299,8 @@ export class GameScene extends Phaser.Scene {
     this._nextPlatformY  = LAUNCH_Y - SAFETY_ZONE_PX;
 
     // ---- チェックポイント ----
-    this._checkpoints = {
-      lastReachedY:      LAUNCH_Y,
-      lastReachedHeight: 0,
-      list:              [],
-    };
-    this._nextCpM    = CP_INTERVAL_M;
+    this._lastCpHeight = 0;
+    this._lastCpY      = null;
     this._retryCount = 0;
     this._retryUI    = [];
 
@@ -396,7 +377,6 @@ export class GameScene extends Phaser.Scene {
 
     this._generatePlatforms();
     this._cleanupPlatforms();
-    this._generateCheckpoints();
 
     switch (this._state) {
       case 'aiming': {
@@ -657,8 +637,8 @@ export class GameScene extends Phaser.Scene {
 
     if (!this._launched || this._gameOverFlag) return;
 
-    // CP通過チェック（毎フレーム手動判定）
-    this._checkCheckpoints();
+    // CPライン通過チェック（毎フレーム）
+    this._checkCpLines();
 
     // 着地アニメーション中はダメージ・再発射判定をスキップ
     if (this._isLandingAnim) return;
@@ -699,183 +679,112 @@ export class GameScene extends Phaser.Scene {
   }
 
   // ------------------------------------------------------------------
-  // チェックポイント生成 / 描画
+  // CPライン生成（ゲーム開始時に全ライン事前作成）
   // ------------------------------------------------------------------
-  _generateCheckpoints() {
-    const targetY = this.cameras.main.scrollY - 200;
-    while (true) {
-      const cpY = LAUNCH_Y - this._nextCpM * COURSE.pxPerMeter;
-      if (cpY < targetY) break;   // カメラより上に達したら終了
-      this._spawnCheckpoint(cpY, this._nextCpM);
-      this._nextCpM += CP_INTERVAL_M;
+  _createCpLines() {
+    this._cpLines = [];
+    for (let h = CP_INTERVAL_M; h <= 2000; h += CP_INTERVAL_M) {
+      const y = LAUNCH_Y - h * COURSE.pxPerMeter;
+
+      // 点線グラフィック
+      const gfx = this.add.graphics().setDepth(5);
+      gfx.lineStyle(1, 0xFFD700, 0.5);
+      for (let x = 0; x < GAME_WIDTH; x += 20) {
+        gfx.lineBetween(x, y, x + 10, y);
+      }
+
+      // 高度アイコン（ワールド座標）
+      const icon = this.add.text(8, y - 8, `📍${h}m`, {
+        fontFamily: "'Press Start 2P'",
+        fontSize:   '6px',
+        color:      '#FFD700',
+        stroke:     '#000000',
+        strokeThickness: 2,
+      }).setDepth(6);
+
+      this._cpLines.push({ height: h, y, reached: false, gfx, icon });
     }
   }
 
-  _checkCheckpoints() {
-    const ballBounds = this._ball.getBounds();
-    this._checkpointGroup.getChildren().forEach(cp => {
+  _clearCpLines() {
+    this._cpLines.forEach(cp => {
+      if (cp.gfx)  cp.gfx.destroy();
+      if (cp.icon) cp.icon.destroy();
+    });
+    this._cpLines      = [];
+    this._lastCpHeight = 0;
+    this._lastCpY      = null;
+  }
+
+  // ------------------------------------------------------------------
+  // CPライン通過チェック（_tickFlying から毎フレーム呼ぶ）
+  // ------------------------------------------------------------------
+  _checkCpLines() {
+    const by = this._ball.y;
+    this._cpLines.forEach(cp => {
       if (cp.reached) return;
-      const cpBounds = cp.getBounds();
-      if (Phaser.Geom.Intersects.RectangleToRectangle(ballBounds, cpBounds)) {
-        cp.reached = true;
-        cp.setTint(0xff8c00);
-        if (cp._flagGfx) this._drawFlag(cp._flagGfx, cp._flagX, cp.y - PLATFORM_H / 2, true);
-        this._checkpoints.lastReachedY      = cp.y - PLATFORM_H / 2 - RADIUS;
-        this._checkpoints.lastReachedHeight = cp.meters;
-        this._deadZoneY = cp.y;
-        this._updateDeadZone(cp.y);
-        this._showCheckpointEffect(cp);
-        soundManager.playSe('se_checkpoint');
+      if (by > cp.y) return;   // まだラインに届いていない
+
+      cp.reached = true;
+      // ラインを明るく
+      cp.gfx.clear();
+      cp.gfx.lineStyle(2, 0xFFD700, 0.9);
+      for (let x = 0; x < GAME_WIDTH; x += 20) {
+        cp.gfx.lineBetween(x, cp.y, x + 10, cp.y);
       }
+
+      this._lastCpHeight = cp.height;
+      this._lastCpY      = cp.y;
+      this._deadZoneY    = cp.y;
+      this._updateDeadZone(cp.y);
+      this._showCheckpointEffect();
+      soundManager.playSe('se_checkpoint');
     });
   }
 
-  _spawnCheckpoint(y, meters) {
-    const cx    = GAME_WIDTH / 2;
-    const flagX = cx - CP_PLATFORM_W / 2 + 8;  // 足場左端から少し内側
+  // ------------------------------------------------------------------
+  // 復帰位置計算（最終CPより上の直近足場）
+  // ------------------------------------------------------------------
+  _getRevivePosition() {
+    if (!this._lastCpY) return { x: LAUNCH_X, y: LAUNCH_Y };
+    const cpY = this._lastCpY;
+    const above = [
+      ...this._platformGroup.getChildren(),
+      ...this._movingGroup.getChildren(),
+      ...this._vanishGroup.getChildren(),
+    ].filter(p => p.y < cpY && p.y > cpY - 400);
 
-    // CP 近傍の通常足場を削除（重複防止）
-    for (const group of [this._platformGroup, this._movingGroup, this._vanishGroup]) {
-      group.getChildren().filter(p => Math.abs(p.y - y) < 100).forEach(p => {
-        this.tweens.killTweensOf(p);
-        p.destroy();
-      });
-    }
+    if (above.length === 0) return { x: GAME_WIDTH / 2, y: cpY - 40 };
 
-    // CP足場（nineslice 固定80×16px）
-    const cp = this.add.nineslice(cx, y, 'platform_a', null, CP_PLATFORM_W, PLATFORM_H, 8, 8, 0, 0);
-    cp.setTint(0xffd700);
-    this.physics.add.existing(cp, true);
-    cp.body.setSize(CP_PLATFORM_W, PLATFORM_H);
-    this._checkpointGroup.add(cp);
-    cp.reached = false;
-    cp.meters  = meters;
-    cp._flagX  = flagX;
-
-    // 旗グラフィック（足場上面から立てる）
-    const gfx = this.add.graphics().setDepth(13);
-    this._drawFlag(gfx, flagX, y - PLATFORM_H / 2, false);
-    cp._flagGfx = gfx;
-
-    // 高度ラベル
-    const label = this.add.text(cx, y - PLATFORM_H / 2 - CP_POLE_H - 6, `${meters}m`, {
-      fontFamily: "'Press Start 2P'",
-      fontSize:   '8px',
-      color:      '#ffd700',
-      stroke: '#000', strokeThickness: 2,
-    }).setDepth(13).setOrigin(0.5, 1);
-    cp._label = label;
-
-    this._checkpoints.list.push({ y, meters, cp });
-  }
-
-  // x, y = ポール根本（足場の上面）
-  _drawFlag(gfx, x, y, gold) {
-    gfx.clear();
-    // ポール（下から上へ）
-    gfx.fillStyle(0xcccccc, 1);
-    gfx.fillRect(x - 1, y - CP_POLE_H, 2, CP_POLE_H);
-    // 旗（ポール上部から右へ三角形）
-    const fc = gold ? 0xffd700 : 0xffffff;
-    gfx.fillStyle(fc, 1);
-    gfx.fillTriangle(
-      x,             y - CP_POLE_H,
-      x + CP_FLAG_W, y - CP_POLE_H + CP_FLAG_W * 0.5,
-      x,             y - CP_POLE_H + CP_FLAG_W,
-    );
-    if (gold) {
-      gfx.lineStyle(1, 0xfffaaa, 1);
-      gfx.strokeTriangle(
-        x,             y - CP_POLE_H,
-        x + CP_FLAG_W, y - CP_POLE_H + CP_FLAG_W * 0.5,
-        x,             y - CP_POLE_H + CP_FLAG_W,
-      );
-    }
+    above.sort((a, b) => b.y - a.y);
+    const nearest = above[0];
+    return { x: nearest.x, y: nearest.y - PLATFORM_H - RADIUS };
   }
 
   // ------------------------------------------------------------------
   // チェックポイント通過演出
   // ------------------------------------------------------------------
-  _showCheckpointEffect(cp) {
+  _showCheckpointEffect() {
     const cam = this.cameras.main;
 
-    // ---- 1. テキストポップアップ ----
     const startY = cam.centerY - 50 + cam.scrollY;
     const endY1  = cam.centerY - 100 + cam.scrollY;
     const endY2  = cam.centerY - 150 + cam.scrollY;
     const cpText = this.add.text(
-      cam.centerX,
-      startY,
+      cam.centerX, startY,
       i18n.t('checkpoint'),
-      {
-        fontSize: '28px',
-        color:    '#FFD700',
-        stroke:   '#000000',
-        strokeThickness: 5,
-      },
+      { fontSize: '28px', color: '#FFD700', stroke: '#000000', strokeThickness: 5 },
     ).setOrigin(0.5).setScrollFactor(0).setDepth(40).setAlpha(0).setScale(0.5);
 
     this.tweens.add({
-      targets:  cpText,
-      alpha:    1,
-      scale:    1,
-      y:        endY1,
-      duration: 300,
-      ease:     'Back.easeOut',
+      targets: cpText, alpha: 1, scale: 1, y: endY1, duration: 300, ease: 'Back.easeOut',
       onComplete: () => {
         this.tweens.add({
-          targets:  cpText,
-          alpha:    0,
-          y:        endY2,
-          duration: 500,
-          delay:    1000,
+          targets: cpText, alpha: 0, y: endY2, duration: 500, delay: 1000,
           onComplete: () => cpText.destroy(),
         });
       },
     });
-
-    // ---- 2. CP足場が白く光る ----
-    if (cp) {
-      this.tweens.addCounter({
-        from:     0,
-        to:       1,
-        duration: 100,
-        yoyo:     true,
-        repeat:   2,
-        onUpdate: (tween) => {
-          const v = tween.getValue();
-          const r = Math.round(0xff);
-          const g = Math.round(0x8c + (0xff - 0x8c) * (1 - v));
-          const b = Math.round(0x00 + 0xff * (1 - v));
-          cp.setTint(Phaser.Display.Color.GetColor(r, g, b));
-        },
-        onComplete: () => cp.setTint(0xff8c00),
-      });
-    }
-
-    // ---- 3. パーティクル（Phaser 3.60+ API）----
-    if (cp) {
-      const px = cp.x;
-      const py = cp.y;
-      const key = '__cpParticle';
-      if (!this.textures.exists(key)) {
-        const g = this.make.graphics({ x: 0, y: 0, add: false });
-        g.fillStyle(0xffffff, 1);
-        g.fillCircle(4, 4, 4);
-        g.generateTexture(key, 8, 8);
-        g.destroy();
-      }
-      const emitter = this.add.particles(px, py, key, {
-        speed:    { min: 50, max: 150 },
-        angle:    { min: 240, max: 300 },
-        scale:    { start: 0.8, end: 0 },
-        lifespan: 800,
-        quantity: 15,
-        tint:     [0xFFD700, 0xFFFFFF, 0xFF8C00],
-        gravityY: 200,
-      }).setDepth(35);
-      this.time.delayedCall(200, () => emitter.destroy());
-    }
   }
 
   // ------------------------------------------------------------------
@@ -994,11 +903,11 @@ export class GameScene extends Phaser.Scene {
     // ライフ残あり → CP or スタートに戻る
     this._retryCount++;
     this.time.delayedCall(800, () => {
-      if (this._checkpoints.lastReachedHeight > 0) {
-        // CP送還
-        const cpY = this._checkpoints.lastReachedY;
+      if (this._lastCpHeight > 0) {
+        // CP送還（直近足場へ復帰）
+        const revivePos = this._getRevivePosition();
+        const cpY = revivePos.y;
 
-        // _nextPlatformY を CP 付近にリセットして足場を再生成できるようにする
         if (this._nextPlatformY < cpY - 100) {
           this._nextPlatformY = cpY - 100;
         }
@@ -1008,7 +917,7 @@ export class GameScene extends Phaser.Scene {
           (_cam, progress) => {
             if (progress === 1) {
               this._returningFlag  = false;
-              this._relaunchPos    = { x: LAUNCH_X, y: cpY };
+              this._relaunchPos    = { x: revivePos.x, y: cpY };
               this._isRelaunch     = true;
               this._gameOverFlag   = false;
               this._launched       = false;
@@ -1098,14 +1007,15 @@ export class GameScene extends Phaser.Scene {
 
     this.time.delayedCall(800, () => {
       msg.destroy();
-      const cpY = this._checkpoints.lastReachedY;
+      const revivePos2 = this._getRevivePosition();
+      const cpY = revivePos2.y;
 
       this.cameras.main.pan(
         GAME_WIDTH / 2, cpY, 500, 'Power2', false,
         (_cam, progress) => {
           if (progress === 1) {
             this._returningFlag  = false;
-            this._relaunchPos    = { x: LAUNCH_X, y: cpY };
+            this._relaunchPos    = { x: revivePos2.x, y: cpY };
             this._isRelaunch     = true;
             this._gameOverFlag   = false;
             this._launched       = false;
@@ -1149,9 +1059,9 @@ export class GameScene extends Phaser.Scene {
     // デバッグ無敵：CPか安全位置に戻す
     if (this._debug) {
       // リセット先：最後のCP > lastSafeY > 発射台の200px上 の優先順
-      const resetY = this._checkpoints.lastReachedHeight > 0
-        ? this._checkpoints.lastReachedY          // 最後のCP位置
-        : Math.min(this._lastSafeY, LAUNCH_Y - 200); // 最低でも200px上
+      const resetY = this._lastCpHeight > 0
+        ? (this._lastCpY ?? LAUNCH_Y)
+        : Math.min(this._lastSafeY, LAUNCH_Y - 200);
       // body.reset でphysicsボディも確実に移動
       this._ball.body.reset(LAUNCH_X, resetY);
       this._ball.body.velocity.set(0, -600);
@@ -1220,7 +1130,7 @@ export class GameScene extends Phaser.Scene {
     }).setOrigin(0.5).setScrollFactor(0).setDepth(51);
     this._retryUI.push(title);
 
-    const h = this._checkpoints.lastReachedHeight;
+    const h = this._lastCpHeight;
     const cpInfo = this.add.text(cx, cy - 28, `最終CP：${h}m`, {
       fontFamily: "'Press Start 2P'",
       fontSize: '12px',
@@ -1287,7 +1197,7 @@ export class GameScene extends Phaser.Scene {
     this._destroyRetryUI();
     this._retryCount++;
 
-    this._relaunchPos  = { x: LAUNCH_X, y: this._checkpoints.lastReachedY };
+    this._relaunchPos  = { x: LAUNCH_X, y: this._lastCpY ?? LAUNCH_Y };
     this._isRelaunch   = true;
     this._gameOverFlag = false;
     this._launched     = false;
@@ -1348,10 +1258,9 @@ export class GameScene extends Phaser.Scene {
       this._ball.body.reset(LAUNCH_X, LAUNCH_Y);
       this._ball.body.allowGravity = false;
       this._clearAllPlatforms();
-      this._clearCheckpoints();
+      this._clearCpLines();
+      this._createCpLines();
       this._nextPlatformY = LAUNCH_Y - SAFETY_ZONE_PX;
-      this._nextCpM       = CP_INTERVAL_M;
-      this._checkpoints   = { lastReachedY: LAUNCH_Y, lastReachedHeight: 0, list: [] };
       // デッドゾーンを初期位置に戻す
       this._deadZoneY = LAUNCH_Y + 100;
       this._updateDeadZone(LAUNCH_Y + 100);
@@ -1368,7 +1277,7 @@ export class GameScene extends Phaser.Scene {
     this._ball.setVelocity(0, 0);
     this._ball.body.allowGravity = false;
     this._clearAllPlatforms();
-    this._clearCheckpoints();
+    this._clearCpLines();
 
     // GAME OVER テキスト
     const goText = this.add.text(
@@ -1439,9 +1348,6 @@ export class GameScene extends Phaser.Scene {
   }
 
   _spawnPlatformAt(y) {
-    // CP 付近は生成しない
-    if (this._isTooCloseToCheckpoint(y)) return;
-
     const meters   = Math.floor((LAUNCH_Y - y) / COURSE.pxPerMeter);
     const w        = PLATFORM_CONFIG.getWidth(meters);
     const minX     = WALL_W + w / 2 + 4;
@@ -1480,10 +1386,6 @@ export class GameScene extends Phaser.Scene {
       Math.abs(p.x - x) < PLATFORM_CONFIG.minDistance &&
       Math.abs(p.y - y) < 40,
     );
-  }
-
-  _isTooCloseToCheckpoint(y) {
-    return this._checkpointGroup.getChildren().some(cp => Math.abs(cp.y - y) < 100);
   }
 
   _getMovingPlatformUnder() {
@@ -1589,14 +1491,6 @@ export class GameScene extends Phaser.Scene {
     this._vanishGroup.clear(true, true);
   }
 
-  _clearCheckpoints() {
-    this._checkpoints.list.forEach(entry => {
-      if (entry.cp?._flagGfx) entry.cp._flagGfx.destroy();
-      if (entry.cp?._label)   entry.cp._label.destroy();
-    });
-    this._checkpointGroup.clear(true, true);
-    this._checkpoints.list = [];
-  }
 
   // ------------------------------------------------------------------
   // デバッグモード
@@ -1642,17 +1536,17 @@ export class GameScene extends Phaser.Scene {
         `Y: ${by}\n` +
         `vx: ${vx}  vy: ${vy}\n` +
         `最高: ${this._maxMeters}m\n` +
-        `CP: ${this._checkpoints.lastReachedHeight}m\n` +
+        `CP: ${this._lastCpHeight}m\n` +
         `onGround: ${og}`,
       );
     }
   }
 
   _debugActivateNearestCP() {
+    // 直近の未通過CPラインを発動
     let nearest = null;
     let minDist = Infinity;
-    this._checkpoints.list.forEach(entry => {
-      const cp   = entry.cp;
+    this._cpLines.forEach(cp => {
       const dist = Math.abs(this._ball.y - cp.y);
       if (!cp.reached && dist < minDist) {
         minDist = dist;
@@ -1661,14 +1555,17 @@ export class GameScene extends Phaser.Scene {
     });
     if (!nearest) return;
 
-    nearest.reached = true;
-    nearest.setTint(0xff8c00);
-    if (nearest._flagGfx) {
-      this._drawFlag(nearest._flagGfx, nearest._flagX, nearest.y - PLATFORM_H / 2, true);
+    nearest.reached    = true;
+    nearest.gfx.clear();
+    nearest.gfx.lineStyle(2, 0xFFD700, 0.9);
+    for (let x = 0; x < GAME_WIDTH; x += 20) {
+      nearest.gfx.lineBetween(x, nearest.y, x + 10, nearest.y);
     }
-    this._checkpoints.lastReachedY      = nearest.y - PLATFORM_H / 2 - RADIUS;
-    this._checkpoints.lastReachedHeight = nearest.meters;
-    this._showCheckpointEffect(nearest);
+    this._lastCpHeight = nearest.height;
+    this._lastCpY      = nearest.y;
+    this._deadZoneY    = nearest.y;
+    this._updateDeadZone(nearest.y);
+    this._showCheckpointEffect();
     soundManager.playSe('se_checkpoint');
   }
 
