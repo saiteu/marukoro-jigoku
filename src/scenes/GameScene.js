@@ -1321,6 +1321,47 @@ export class GameScene extends Phaser.Scene {
   }
 
   // ------------------------------------------------------------------
+  // 背景テクスチャ切替（2.5秒クロスフェード）
+  // ------------------------------------------------------------------
+  _changeBgTexture(key) {
+    if (!key || !this.textures.exists(key)) return;
+    if (!this._bgTile) return;
+    if (this._bgTile.texture.key === key) return;
+
+    // 前回のトランジションをキャンセル
+    if (this._bgTileB) {
+      this.tweens.killTweensOf(this._bgTileB);
+      this._bgTileB.destroy();
+      this._bgTileB = null;
+    }
+
+    // 新テクスチャを上レイヤーとして配置し、フェードイン
+    this._bgTileB = this.add.tileSprite(
+      GAME_WIDTH / 2, GAME_HEIGHT / 2,
+      GAME_WIDTH, GAME_HEIGHT,
+      key,
+    ).setScrollFactor(0).setDepth(-1).setAlpha(0);
+    this._bgTileB.tilePositionY = this._bgTile.tilePositionY;
+
+    this.tweens.add({
+      targets:  this._bgTileB,
+      alpha:    0.45,
+      duration: 2500,
+      ease:     'Linear',
+      onComplete: () => {
+        if (this._bgTile && this.textures.exists(key)) {
+          this._bgTile.setTexture(key);
+          this._bgTile.setAlpha(0.45);
+        }
+        if (this._bgTileB) {
+          this._bgTileB.destroy();
+          this._bgTileB = null;
+        }
+      },
+    });
+  }
+
+  // ------------------------------------------------------------------
   // ゾーン名表示
   // ------------------------------------------------------------------
   _showZoneName(name) {
