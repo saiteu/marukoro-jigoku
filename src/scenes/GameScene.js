@@ -23,7 +23,7 @@ import { HELL_ZONES, getZoneByHeight } from '../config/hellZones.js';
 const DEBUG_MODE = new URLSearchParams(window.location.search).get('debug') === 'true';
 
 // ---- ライフ ----
-const MAX_LIVES = 2;
+const MAX_LIVES = 5;
 
 // ---- 空中横移動 ----
 const AIR_ACCEL     = 20;
@@ -73,9 +73,16 @@ const VANISH_WARN     = 2000;
 const COLOR_MOVING  = 0x74b9ff;
 const COLOR_VANISH  = 0xff9f43;
 
+// ---- 到達可能性・配置ルール ----
+const MAX_JUMP_X = 280;   // 水平最大到達距離(px)
+const MAX_JUMP_Y = 380;   // 垂直最大到達距離(px)
+const PLAT_GAP_X_MIN = 80;   // 横ずれ最小(真上防止)
+const PLAT_GAP_X_MAX = 220;  // 横ずれ最大(届かない防止)
+const PLAT_GAP_Y_MAX = 320;  // 縦間隔上限(px)
+
 
 // ---- チェックポイント ----
-const CP_INTERVAL_M = 100;   // 100mごとにCPライン
+const CP_INTERVAL_M = 200;   // 200mごとにCPライン
 
 export class GameScene extends Phaser.Scene {
   constructor() {
@@ -86,6 +93,7 @@ export class GameScene extends Phaser.Scene {
   // preload
   // ------------------------------------------------------------------
   preload() {
+    this._createSpikeTexture();
     this.load.image('marukoro',    'assets/images/marukoro.png');
     this.load.image('platform_a',  'assets/images/platform_a.png');
     this.load.image('platform_b',  'assets/images/platform_b.png');
@@ -182,6 +190,14 @@ export class GameScene extends Phaser.Scene {
       },
     );
 
+    // ---- トゲ ----
+    this._spikeGroup = this.physics.add.staticGroup();
+    this._spikeHitCooldown = false;
+    this.physics.add.overlap(
+      this._ball, this._spikeGroup,
+      () => this._onSpikeHit(),
+    );
+
     // ---- CPライン（physics不要・高度監視で判定）----
     this._cpLines = [];
 
@@ -251,6 +267,7 @@ export class GameScene extends Phaser.Scene {
     this.input.on('pointerdown', (pointer) => {
       if (this._state !== 'aiming') return;
       if (!this._canLaunch) return;
+      if (this._isScrollingUp) return;
       this._isCharging  = true;
       this._chargeStart = this.time.now;
       this._aimPower    = 400;
@@ -314,11 +331,15 @@ export class GameScene extends Phaser.Scene {
     this._maxMeters      = 0;
     this._maxHeight      = 0;
     this._currentZoneId  = HELL_ZONES[0].id;
+    this._isFirstZone    = true;
     this._pastApex       = false;
     this._restTimer      = 0;
     this._stuckTimer     = 0;
     this._lastStuckY     = 0;
     this._nextPlatformY  = LAUNCH_Y - SAFETY_ZONE_PX;
+    this._lastPlatformX  = LAUNCH_X;
+    this._lastPlatformY  = LAUNCH_Y;
+    this._lastPlatformSide = 'left';
 
     // ---- チェックポイント ----
     this._lastCpHeight = 0;
@@ -396,6 +417,11 @@ export class GameScene extends Phaser.Scene {
 
     if (this._bounceSeCooldown > 0) this._bounceSeCooldown -= delta;
     if (this._landSeCooldown   > 0) this._landSeCooldown   -= delta;
+
+    // 「上を確認」ボタン押下中のスクロール
+    if (this._isScrollingUp && this._state === 'aiming') {
+      this.cameras.main.scrollY -= 8;
+    }
 
     this._generatePlatforms();
     this._cleanupPlatforms();
@@ -508,6 +534,7 @@ export class GameScene extends Phaser.Scene {
         this._trail.start();
         this._trajectoryGfx.clear();
         this._destroyLaunchPanel();
+        this._destroyScrollUpButton();
 
         this._state        = 'flying';
         this._launched     = true;
@@ -670,7 +697,13 @@ export class GameScene extends Phaser.Scene {
             this._bgRect.setFillStyle(Phaser.Display.Color.GetColor(r, g, b));
           },
         });
-        this._showZoneName(newZone.name[i18n.lang] ?? newZone.name.ja);
+        const zoneName = newZone.name[i18n.lang] ?? newZone.name.ja;
+        this._showZoneName(zoneName);
+        if (this._isFirstZone) {
+          this._isFirstZone = false;
+        } else {
+          this._showZoneTitle(newZone);
+        }
       }
     }
     if (!this._meterText.visible) this._meterText.setVisible(true);
@@ -1116,6 +1149,74 @@ export class GameScene extends Phaser.Scene {
   }
 
   // ------------------------------------------------------------------
+  // ゾーンタイトル演出（左スライドイン → 1.5秒 → 右スライドアウト）
+  // ------------------------------------------------------------------
+  _showZoneTitle(zone) {
+    const isHell     = zone.id.startsWith('hell') || zone.id === 'gate';
+    const isSpace    = zone.id === 'space' || zone.id === 'deepspace' || zone.id === 'exosphere';
+    const panelColor = isHell ? 0x2A0000 : 0x000000;
+    const accentColor = isHell ? 0xFF2200 : 0xFFD700;
+    const categoryText = isHell
+      ? '🔥 HELL ZONE'
+      : isSpace
+        ? '🚀 SPACE ZONE'
+        : '☁ ZONE';
+    const name = zone.name[i18n.lang] ?? zone.name.ja;
+
+    const panelW = 300;
+    const panelH = 64;
+    const startX = -panelW;
+    const endX   = 0;
+    const posY   = GAME_HEIGHT / 2 - 40;
+
+    const container = this.add.container(startX, posY)
+      .setScrollFactor(0).setDepth(200);
+
+    const panel = this.add.rectangle(0, 0, panelW, panelH, panelColor, 0.8)
+      .setOrigin(0, 0.5);
+    const accent = this.add.rectangle(0, 0, 5, panelH, accentColor, 1)
+      .setOrigin(0, 0.5);
+    const category = this.add.text(14, -14, categoryText, {
+      fontFamily: '"Press Start 2P"',
+      fontSize:   '6px',
+      color:      `#${accentColor.toString(16).padStart(6, '0')}`,
+      stroke:     '#000000', strokeThickness: 2,
+    }).setOrigin(0, 0.5);
+    const titleText = this.add.text(14, 6, name, {
+      fontFamily: '"DotGothic16", sans-serif',
+      fontSize:   '20px',
+      color:      '#ffffff',
+      stroke:     '#000000', strokeThickness: 4,
+    }).setOrigin(0, 0.5);
+    const heightLabel = this.add.text(14, 24, `${zone.heightStart}m ~`, {
+      fontFamily: '"Press Start 2P"',
+      fontSize:   '6px',
+      color:      '#aaaaaa',
+      stroke:     '#000000', strokeThickness: 2,
+    }).setOrigin(0, 0.5);
+
+    container.add([panel, accent, category, titleText, heightLabel]);
+
+    this.tweens.add({
+      targets:  container,
+      x:        endX,
+      duration: 400,
+      ease:     'Back.easeOut',
+      onComplete: () => {
+        this.time.delayedCall(1500, () => {
+          this.tweens.add({
+            targets:  container,
+            x:        GAME_WIDTH + panelW,
+            duration: 400,
+            ease:     'Back.easeIn',
+            onComplete: () => container.destroy(),
+          });
+        });
+      },
+    });
+  }
+
+  // ------------------------------------------------------------------
   // 落下検知（チェックポイント有無で分岐）
   // ------------------------------------------------------------------
   _onFallDetected() {
@@ -1284,7 +1385,6 @@ export class GameScene extends Phaser.Scene {
     this._ball.setVelocity(0, 0);
     this._ball.body.allowGravity = false;
 
-    // メッセージなし・200ms後に即ゲージ表示
     this.time.delayedCall(200, () => {
       this._ball.body.allowGravity = true;
       this._relaunchFlag = false;
@@ -1314,6 +1414,7 @@ export class GameScene extends Phaser.Scene {
     this._hintText.setVisible(false);
     this._destroyLaunchPanel();
     this._createLaunchPanel();
+    this._createScrollUpButton();
 
     if (this._isRelaunch && this._relaunchPos) {
       const scrollY = this._relaunchPos.y - GAME_HEIGHT * 0.55;
@@ -1326,11 +1427,72 @@ export class GameScene extends Phaser.Scene {
       this._clearAllPlatforms();
       this._clearCpLines();
       this._createCpLines();
-      this._nextPlatformY = LAUNCH_Y - SAFETY_ZONE_PX;
+      this._nextPlatformY    = LAUNCH_Y - SAFETY_ZONE_PX;
+      this._lastPlatformX    = LAUNCH_X;
+      this._lastPlatformY    = LAUNCH_Y;
+      this._lastPlatformSide = 'left';
       // デッドゾーンを初期位置に戻す
       this._deadZoneY = LAUNCH_Y + 100;
       this._updateDeadZone(LAUNCH_Y + 100);
     }
+
+    // 発射前に足場を先読み一括生成（飛行中の突然出現を防ぐ）
+    this._preGeneratePlatforms();
+  }
+
+  // ------------------------------------------------------------------
+  // 「上を確認」ボタン
+  // ------------------------------------------------------------------
+  _createScrollUpButton() {
+    this._destroyScrollUpButton();
+    const label = i18n.lang === 'ja' ? '👆 上を確認' : '👆 LOOK UP';
+    this._scrollUpBtn = this.add.text(
+      GAME_WIDTH - 12, GAME_HEIGHT - 64,
+      label,
+      {
+        fontFamily:      '"Press Start 2P"',
+        fontSize:        '7px',
+        color:           '#ffffff',
+        stroke:          '#000000', strokeThickness: 3,
+        backgroundColor: '#00000088',
+        padding:         { x: 8, y: 6 },
+      },
+    ).setOrigin(1, 1).setScrollFactor(0).setDepth(200).setInteractive();
+
+    this._isScrollingUp = false;
+
+    this._scrollUpBtn.on('pointerdown', (pointer) => {
+      pointer.event.stopPropagation();
+      this._isScrollingUp = true;
+    });
+    this._scrollUpBtn.on('pointerup',  () => {
+      this._isScrollingUp = false;
+      this._returnCameraToPlayer();
+    });
+    this._scrollUpBtn.on('pointerout', () => {
+      this._isScrollingUp = false;
+      this._returnCameraToPlayer();
+    });
+  }
+
+  _destroyScrollUpButton() {
+    this._isScrollingUp = false;
+    if (this._scrollUpBtn) { this._scrollUpBtn.destroy(); this._scrollUpBtn = null; }
+  }
+
+  _returnCameraToPlayer() {
+    const targetY = (this._isRelaunch && this._relaunchPos)
+      ? this._relaunchPos.y
+      : LAUNCH_Y;
+    this.cameras.main.pan(
+      GAME_WIDTH / 2, targetY, 400, 'Power2',
+      false,
+      (_cam, progress) => {
+        if (progress === 1 && this._isRelaunch && this._relaunchPos) {
+          this.cameras.main.setScroll(0, this._relaunchPos.y - GAME_HEIGHT * 0.55);
+        }
+      },
+    );
   }
 
   _triggerGameOver() {
@@ -1344,6 +1506,7 @@ export class GameScene extends Phaser.Scene {
     this._ball.body.allowGravity = false;
     this._clearAllPlatforms();
     this._clearCpLines();
+    this._destroyScrollUpButton();
 
     // GAME OVER テキスト
     const goText = this.add.text(
@@ -1379,15 +1542,63 @@ export class GameScene extends Phaser.Scene {
   // 足場 生成 / 削除
   // ------------------------------------------------------------------
   _generatePlatforms() {
-    const targetY = this.cameras.main.scrollY - 400;
-    while (this._nextPlatformY > targetY) {
+    // 飛行中：ボール位置を基準に先読みフロンティアを延伸するのみ
+    // エイム中：カメラ基準で通常生成
+    const targetY = this._state === 'flying'
+      ? Math.min(this.cameras.main.scrollY, this._ball.y) - 800
+      : this.cameras.main.scrollY - 400;
+    const maxPerFrame = this._state === 'flying' ? 4 : 6;
+    let count = 0;
+    while (this._nextPlatformY > targetY && count < maxPerFrame) {
+      if (this._isTooCloseToCpLine(this._nextPlatformY)) {
+        this._nextPlatformY -= 50;
+        continue;
+      }
       this._spawnPlatformAt(this._nextPlatformY);
       const meters = Math.floor((LAUNCH_Y - this._nextPlatformY) / COURSE.pxPerMeter);
-      this._nextPlatformY -= PLATFORM_CONFIG.getGapY(meters);
+      const gapY   = Math.min(PLATFORM_CONFIG.getGapY(meters), PLAT_GAP_Y_MAX);
+      this._nextPlatformY -= gapY;
+      count++;
     }
 
-    // CP 送還後などで足場が不足している区間を補填
-    this._fillMissingPlatforms();
+    // 隙間補填は飛行中には行わない（CP通過後の突然出現の根本原因のため）
+    if (this._state !== 'flying') {
+      this._fillMissingPlatforms();
+    }
+
+    this._validatePlatformLayout();
+  }
+
+  // ------------------------------------------------------------------
+  // 発射前の先読み一括生成（ステージ開始前にまとめて配置・検証）
+  // ------------------------------------------------------------------
+  _preGeneratePlatforms() {
+    const baseY = (this._isRelaunch && this._relaunchPos)
+      ? this._relaunchPos.y
+      : LAUNCH_Y - SAFETY_ZONE_PX;
+
+    // 発射位置から 3200px（≈400m）先まで一括生成
+    const targetY = baseY - 3200;
+
+    // すでに十分先まで生成済みなら何もしない
+    if (this._nextPlatformY <= targetY) return;
+
+    let iterations = 0;
+    while (this._nextPlatformY > targetY && iterations < 200) {
+      if (this._isTooCloseToCpLine(this._nextPlatformY)) {
+        this._nextPlatformY -= 50;
+        iterations++;
+        continue;
+      }
+      this._spawnPlatformAt(this._nextPlatformY);
+      const meters = Math.floor((LAUNCH_Y - this._nextPlatformY) / COURSE.pxPerMeter);
+      const gapY   = Math.min(PLATFORM_CONFIG.getGapY(meters), PLAT_GAP_Y_MAX);
+      this._nextPlatformY -= gapY;
+      iterations++;
+    }
+
+    // 一括生成後に配置検証（進行不能な詰みを修正）
+    this._validatePlatformLayout();
   }
 
   _fillMissingPlatforms() {
@@ -1413,23 +1624,142 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  // ------------------------------------------------------------------
+  // 配置検証：水平方向が塞がれていないか確認し、詰みを自動修正
+  // ------------------------------------------------------------------
+  _validatePlatformLayout() {
+    const USABLE_LEFT  = WALL_W;
+    const USABLE_RIGHT = GAME_WIDTH - WALL_W;
+    const MIN_PASS     = 60;   // ボールが通れる最小ギャップ(px)
+    const LAYER_BAND   = 50;   // 同一レイヤーとみなす縦幅(px)
+
+    const all = [
+      ...this._platformGroup.getChildren(),
+      ...this._movingGroup.getChildren(),
+      ...this._vanishGroup.getChildren(),
+    ].sort((a, b) => a.y - b.y);
+
+    if (all.length === 0) return;
+
+    // 同じ高さ帯の足場をレイヤーにまとめる
+    const layers = [];
+    let layer = [all[0]];
+    for (let i = 1; i < all.length; i++) {
+      if (all[i].y - layer[layer.length - 1].y < LAYER_BAND) {
+        layer.push(all[i]);
+      } else {
+        layers.push(layer);
+        layer = [all[i]];
+      }
+    }
+    layers.push(layer);
+
+    // 各レイヤーで水平カバレッジを確認
+    for (const group of layers) {
+      const segments = group.map(p => ({
+        left:  p.x - p.displayWidth / 2,
+        right: p.x + p.displayWidth / 2,
+        plat:  p,
+      })).sort((a, b) => a.left - b.left);
+
+      // 最大ギャップを計算
+      let covered = USABLE_LEFT;
+      let maxGap  = 0;
+      for (const seg of segments) {
+        if (seg.left > covered) {
+          maxGap = Math.max(maxGap, seg.left - covered);
+        }
+        covered = Math.max(covered, seg.right);
+      }
+      maxGap = Math.max(maxGap, USABLE_RIGHT - covered);
+
+      // ギャップが不十分 → 最も幅広い足場を削除して通路を確保
+      if (maxGap < MIN_PASS) {
+        const widest = group.reduce((a, b) =>
+          a.displayWidth >= b.displayWidth ? a : b,
+        );
+        // 移動足場ならtweenも止める
+        this.tweens.killTweensOf(widest);
+        widest.destroy();
+      }
+    }
+  }
+
   _spawnPlatformAt(y) {
+    // CPライン上下150px以内はスキップ
+    if (this._isTooCloseToCpLine(y)) return;
+
     const meters   = Math.floor((LAUNCH_Y - y) / COURSE.pxPerMeter);
     const w        = PLATFORM_CONFIG.getWidth(meters);
-    const minX     = WALL_W + w / 2 + 4;
-    const maxX     = GAME_WIDTH - WALL_W - w / 2 - 4;
-    const x        = Phaser.Math.Between(minX, maxX);
     const imageKey = this._getPlatformImageKey(getZoneByHeight(meters).id);
 
-    if (this._isOverlapping(x, y)) return;
+    const x = this._getNextPlatformX(w, y);
+    if (x === null) return;
 
+    let spawnedPlat = null;
     if (meters >= VANISH_START_M && Math.random() < 0.3) {
-      this._spawnVanishPlatform(x, y, w);
+      spawnedPlat = this._spawnVanishPlatform(x, y, w);
     } else if (meters >= MOVING_START_M && Math.random() < 0.3) {
-      this._spawnMovingPlatform(x, y, w);
+      spawnedPlat = this._spawnMovingPlatform(x, y, w);
     } else {
-      this._spawnNormalPlatform(x, y, w, imageKey);
+      spawnedPlat = this._spawnNormalPlatform(x, y, w, imageKey);
     }
+
+    if (spawnedPlat) this._tryAddSpike(spawnedPlat, x, y, w, meters);
+
+    this._lastPlatformX  = x;
+    this._lastPlatformY  = y;
+  }
+
+  /** ルール1〜4を適用してX座標を決定。配置不可なら null を返す */
+  _getNextPlatformX(w, y) {
+    const minX = WALL_W + w / 2 + 4;
+    const maxX = GAME_WIDTH - WALL_W - w / 2 - 4;
+
+    // ルール4：交互方向
+    const newSide = this._lastPlatformSide === 'left' ? 'right' : 'left';
+    this._lastPlatformSide = newSide;
+
+    const gapX    = Phaser.Math.Between(PLAT_GAP_X_MIN, PLAT_GAP_X_MAX);
+    let x = newSide === 'right'
+      ? this._lastPlatformX + gapX
+      : this._lastPlatformX - gapX;
+
+    // 画面内クランプ
+    x = Phaser.Math.Clamp(x, minX, maxX);
+
+    // ルール1：直前足場の真上禁止（横100px・上200px以内）
+    if (this._isTooCloseAbove(x, y)) {
+      // 反対側にずらして再試行
+      x = newSide === 'right'
+        ? Phaser.Math.Clamp(this._lastPlatformX - gapX, minX, maxX)
+        : Phaser.Math.Clamp(this._lastPlatformX + gapX, minX, maxX);
+    }
+
+    // 重複チェック（10回リトライ、幅考慮）
+    for (let i = 0; i < 10; i++) {
+      if (!this._isOverlapping(x, y, w)) break;
+      x = Phaser.Math.Between(minX, maxX);
+      if (i === 9) return null;
+    }
+
+    return x;
+  }
+
+  /** 直前足場の真上に被るか判定 */
+  _isTooCloseAbove(x, y) {
+    const dx = Math.abs(x - this._lastPlatformX);
+    const dy = this._lastPlatformY - y;  // 上方向が正
+    return dx < 100 && dy > 0 && dy < 200;
+  }
+
+  /** 未通過CPラインの上下150px以内か判定 */
+  _isTooCloseToCpLine(y) {
+    if (!this._cpLines) return false;
+    return this._cpLines.some(cp => {
+      if (cp.reached) return false;  // 通過済みは無視
+      return Math.abs(y - cp.y) < 150;
+    });
   }
 
   _getPlatformImageKey(zoneId) {
@@ -1442,16 +1772,18 @@ export class GameScene extends Phaser.Scene {
     return 'platform_c'; // 地獄ゾーン
   }
 
-  _isOverlapping(x, y) {
+  _isOverlapping(x, y, w = 80) {
     const all = [
       ...this._platformGroup.getChildren(),
       ...this._movingGroup.getChildren(),
       ...this._vanishGroup.getChildren(),
     ];
-    return all.some(p =>
-      Math.abs(p.x - x) < PLATFORM_CONFIG.minDistance &&
-      Math.abs(p.y - y) < 40,
-    );
+    return all.some(p => {
+      // 足場の実際の幅を考慮したバウンディングボックス重複チェック
+      const pw     = p.displayWidth || 80;
+      const halfW  = (w + pw) / 2 + 12;  // 12px マージン
+      return Math.abs(p.x - x) < halfW && Math.abs(p.y - y) < 40;
+    });
   }
 
   _getMovingPlatformUnder() {
@@ -1471,6 +1803,7 @@ export class GameScene extends Phaser.Scene {
     this.physics.add.existing(plat, true);
     plat.body.setSize(w, PLATFORM_H);
     this._platformGroup.add(plat);
+    return plat;
   }
 
   _spawnMovingPlatform(x, y, w) {
@@ -1497,6 +1830,7 @@ export class GameScene extends Phaser.Scene {
       ease:     'Sine.InOut',
       onUpdate: () => { if (plat?.active) plat.body.reset(plat.x, plat.y); },
     });
+    return plat;
   }
 
   _spawnVanishPlatform(x, y, w) {
@@ -1509,6 +1843,7 @@ export class GameScene extends Phaser.Scene {
     plat.body.setSize(w, PLATFORM_H);
     this._vanishGroup.add(plat);
     plat.vanishStarted = false;
+    return plat;
   }
 
   _startVanishTimer(plat) {
@@ -1548,6 +1883,68 @@ export class GameScene extends Phaser.Scene {
       .filter(p => p.y > limit).forEach(p => p.destroy());
   }
 
+  // ------------------------------------------------------------------
+  // トゲ（スパイク）
+  // ------------------------------------------------------------------
+  _createSpikeTexture() {
+    if (this.textures.exists('spike')) return;
+    const canvas = document.createElement('canvas');
+    canvas.width  = 48;
+    canvas.height = 16;
+    const ctx = canvas.getContext('2d');
+    const spikeCount = 3, spikeW = 16, spikeH = 14;
+    for (let i = 0; i < spikeCount; i++) {
+      ctx.beginPath();
+      ctx.moveTo(i * spikeW, spikeH);
+      ctx.lineTo(i * spikeW + spikeW / 2, 0);
+      ctx.lineTo((i + 1) * spikeW, spikeH);
+      ctx.closePath();
+      ctx.fillStyle   = '#C0C0C0';
+      ctx.fill();
+      ctx.strokeStyle = '#808080';
+      ctx.lineWidth   = 1;
+      ctx.stroke();
+    }
+    this.textures.addCanvas('spike', canvas);
+  }
+
+  _tryAddSpike(_plat, x, y, w, meters) {
+    // 200m未満は出現しない
+    if (meters < 200) return;
+    // 高度に応じた出現確率（最大40%）
+    const chance = Math.min((meters - 200) / 1000, 0.4);
+    if (Math.random() > chance) return;
+
+    const tileW   = Math.max(w, 48);
+    const spike   = this.add.tileSprite(x, y - PLATFORM_H, tileW, 16, 'spike');
+    spike.setOrigin(0.5, 1);
+    this.physics.add.existing(spike, true);
+    spike.body.setSize(tileW, 10);
+    spike.body.setOffset(0, 6);
+    this._spikeGroup.add(spike);
+  }
+
+  _onSpikeHit() {
+    if (this._spikeHitCooldown) return;
+    if (this._state !== 'flying') return;
+    this._spikeHitCooldown = true;
+
+    this._lives = Math.max(0, this._lives - 1);
+    this._livesText.setText(this._getLivesString());
+    this._playLoseLifeEffect();
+
+    if (this._lives <= 0) {
+      this.time.delayedCall(500, () => {
+        this._gameOverFlag = true;
+        this._triggerGameOver();
+      });
+    }
+
+    this.time.delayedCall(1500, () => {
+      this._spikeHitCooldown = false;
+    });
+  }
+
   _clearAllPlatforms() {
     this._platformGroup.clear(true, true);
     this._movingGroup.getChildren().slice().forEach(p => {
@@ -1555,6 +1952,7 @@ export class GameScene extends Phaser.Scene {
       p.destroy();
     });
     this._vanishGroup.clear(true, true);
+    this._spikeGroup.clear(true, true);
   }
 
 
