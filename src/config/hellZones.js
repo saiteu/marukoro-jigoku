@@ -1,6 +1,14 @@
 /**
  * ゾーン定義（地上 → 大気圏 → 宇宙 → 八大地獄）
- * bgImage は将来の背景画像実装用プレースホルダー。
+ *
+ * bgImage: public/assets/backgrounds/ 以下のファイル名（拡張子なし）
+ *   bg_sky       : 地上・対流圏（0-200m）
+ *   bg_highsky   : 成層圏・中間圏・熱圏（200-500m）
+ *   bg_space     : 外気圏・宇宙空間・外宇宙（500-800m）
+ *   bg_gate      : 地獄の入口（800-900m）
+ *   bg_hell      : 上位地獄・等活〜叫喚（900-1300m）
+ *   bg_hell_deep : 深層地獄・大叫喚〜大焦熱（1300-1600m）
+ *   bg_avici     : 阿鼻地獄（1600m+）
  */
 export const HELL_ZONES = [
   {
@@ -10,7 +18,7 @@ export const HELL_ZONES = [
     heightEnd: 100,
     bgColor: 0x87CEEB,
     platformColor: 0x7bc67e,
-    bgImage: null,
+    bgImage: 'bg_sky',
   },
   {
     id: 'troposphere',
@@ -19,7 +27,7 @@ export const HELL_ZONES = [
     heightEnd: 200,
     bgColor: 0x6BA3C8,
     platformColor: 0x8BC4E8,
-    bgImage: null,
+    bgImage: 'bg_sky',
   },
   {
     id: 'stratosphere',
@@ -28,7 +36,7 @@ export const HELL_ZONES = [
     heightEnd: 300,
     bgColor: 0x3A6B9E,
     platformColor: 0x5A8BBE,
-    bgImage: null,
+    bgImage: 'bg_highsky',
   },
   {
     id: 'mesosphere',
@@ -37,7 +45,7 @@ export const HELL_ZONES = [
     heightEnd: 400,
     bgColor: 0x1A3A6E,
     platformColor: 0x2A4A8E,
-    bgImage: null,
+    bgImage: 'bg_highsky',
   },
   {
     id: 'thermosphere',
@@ -46,7 +54,7 @@ export const HELL_ZONES = [
     heightEnd: 500,
     bgColor: 0x0A1A3E,
     platformColor: 0x1A2A5E,
-    bgImage: null,
+    bgImage: 'bg_highsky',
   },
   {
     id: 'exosphere',
@@ -55,7 +63,7 @@ export const HELL_ZONES = [
     heightEnd: 600,
     bgColor: 0x050D1F,
     platformColor: 0x0F1D3F,
-    bgImage: null,
+    bgImage: 'bg_space',
   },
   {
     id: 'space',
@@ -64,7 +72,7 @@ export const HELL_ZONES = [
     heightEnd: 700,
     bgColor: 0x000008,
     platformColor: 0x1A1A2E,
-    bgImage: null,
+    bgImage: 'bg_space',
   },
   {
     id: 'deepspace',
@@ -73,7 +81,7 @@ export const HELL_ZONES = [
     heightEnd: 800,
     bgColor: 0x0D0015,
     platformColor: 0x1A0030,
-    bgImage: null,
+    bgImage: 'bg_space',
   },
   {
     id: 'gate',
@@ -82,7 +90,7 @@ export const HELL_ZONES = [
     heightEnd: 900,
     bgColor: 0x2D1B4E,
     platformColor: 0x4A3570,
-    bgImage: null,
+    bgImage: 'bg_gate',
   },
   {
     id: 'hell1',
@@ -91,7 +99,7 @@ export const HELL_ZONES = [
     heightEnd: 1000,
     bgColor: 0x8B0000,
     platformColor: 0xA52020,
-    bgImage: null,
+    bgImage: 'bg_hell',
   },
   {
     id: 'hell2',
@@ -100,7 +108,7 @@ export const HELL_ZONES = [
     heightEnd: 1100,
     bgColor: 0x1A1A1A,
     platformColor: 0x333333,
-    bgImage: null,
+    bgImage: 'bg_hell',
   },
   {
     id: 'hell3',
@@ -109,7 +117,7 @@ export const HELL_ZONES = [
     heightEnd: 1200,
     bgColor: 0x4A2800,
     platformColor: 0x6B3A00,
-    bgImage: null,
+    bgImage: 'bg_hell',
   },
   {
     id: 'hell4',
@@ -118,7 +126,7 @@ export const HELL_ZONES = [
     heightEnd: 1300,
     bgColor: 0xCC4400,
     platformColor: 0xFF6600,
-    bgImage: null,
+    bgImage: 'bg_hell',
   },
   {
     id: 'hell5',
@@ -127,7 +135,7 @@ export const HELL_ZONES = [
     heightEnd: 1400,
     bgColor: 0xFF2200,
     platformColor: 0xCC0000,
-    bgImage: null,
+    bgImage: 'bg_hell_deep',
   },
   {
     id: 'hell6',
@@ -136,7 +144,7 @@ export const HELL_ZONES = [
     heightEnd: 1500,
     bgColor: 0xFF4400,
     platformColor: 0xFF6633,
-    bgImage: null,
+    bgImage: 'bg_hell_deep',
   },
   {
     id: 'hell7',
@@ -145,7 +153,7 @@ export const HELL_ZONES = [
     heightEnd: 1600,
     bgColor: 0xFF8800,
     platformColor: 0xFFAA00,
-    bgImage: null,
+    bgImage: 'bg_avici',
   },
   {
     id: 'hell8',
@@ -154,7 +162,7 @@ export const HELL_ZONES = [
     heightEnd: 99999,
     bgColor: 0x000000,
     platformColor: 0x1A0000,
-    bgImage: null,
+    bgImage: 'bg_avici',
   },
 ];
 
